@@ -10,7 +10,8 @@ from pathlib import Path
 import numpy as np
 
 from camera import camera_metadata
-from geometry import kitti_cam2_from_pose_cam0, waymo_optical_pose
+from geometry import kitti_cam2_from_pose_cam0, waymo_optical_pose, R_WAYMO_CAM_FROM_OPT
+from kitti_extrinsics import read_calib, kitti_T_V_C2, camera_to_vehicle_pose
 from tfrecord_io import each_record, decode_waymo_frame, get_front
 
 
@@ -40,6 +41,52 @@ def split_continuous(frames, prefix, split, source, K_src, distortion):
     return out
 
 
+
+def resolve_kitti_odometry_calibration(base, seq_id, calib_extra_root=None):
+    """Read original P0..P3; load sequence-matched Tr from separate calib, if needed."""
+    original_path = base / 'calib.txt'
+    calib = read_calib(original_path)
+    missing = [p for p in ('P0', 'P1', 'P2', 'P3') if p not in calib]
+    if missing:
+        raise ValueError(f'{original_path} is missing {missing}')
+    if 'Tr' in calib or 'Tr_velo_to_cam' in calib:
+        return calib, str(original_path)
+    if not calib_extra_root:
+        raise ValueError(
+            f'{original_path} is missing Tr. Download official data_odometry_calib.zip '
+            'and specify --kitti-calib-root pointing to its extracted folder. '
+            'P0..P3 support camera-relative GT but not Velodyne reference extrinsics.'
+        )
+    root = Path(calib_extra_root)
+    candidates = [
+        root / 'dataset' / 'sequences' / seq_id / 'calib.txt',
+        root / 'sequences' / seq_id / 'calib.txt',
+        root / seq_id / 'calib.txt',
+        root / f'calib_{seq_id}.txt',
+    ]
+    matches = [p for p in candidates if p.is_file()]
+    if not matches:
+        raise FileNotFoundError(
+            f'Extra KITTI calibration for sequence {seq_id} not found. '
+            f'Checked: {[str(p) for p in candidates]}'
+        )
+    extra_path = matches[0]
+    extra = read_calib(extra_path)
+    for key in ('P0', 'P1', 'P2', 'P3'):
+        if key not in extra or calib[key].shape != extra[key].shape:
+            raise ValueError(f'Calibration mismatch: {key} missing or different shape in {extra_path}')
+        if not np.allclose(calib[key], extra[key], rtol=1e-6, atol=1e-5):
+            raise ValueError(
+                f'KITTI {seq_id}: {key} differs between {original_path} and {extra_path}; '
+                'refusing to combine potentially mismatched sensor calibrations.'
+            )
+    tr = extra.get('Tr', extra.get('Tr_velo_to_cam'))
+    if tr is None or tr.shape != (12,):
+        raise ValueError(f'{extra_path} is also missing a 12-value Tr')
+    calib['Tr'] = tr.copy()
+    return calib, str(extra_path)
+
+
 def index_kitti(args):
     root = Path(args.root)
     poses_root = Path(args.poses_root) if args.poses_root else root / 'poses'
@@ -54,14 +101,17 @@ def index_kitti(args):
         if not base.exists() or not pose_path.exists():
             print(f'SKIP missing KITTI {seq_id} folder or GT pose')
             continue
-        calib = {}
-        for line in (base / 'calib.txt').read_text().splitlines():
-            if ':' in line:
-                k, v = line.split(':', 1)
-                calib[k.strip()] = np.fromstring(v, sep=' ')
+        calib, extrinsic_calib_path = resolve_kitti_odometry_calibration(
+            base, seq_id, getattr(args, "kitti_calib_root", None)
+        )
         P0 = calib['P0'].reshape(3, 4)
         P2 = calib['P2'].reshape(3, 4)
         K = P2[:, :3].tolist()
+        T_vehicle_camera, extr_meta = kitti_T_V_C2(
+            calib, seq_id,
+            vehicle_frame=getattr(args, 'kitti_frame', 'velodyne'),
+            imu_calib_root=getattr(args, 'kitti_imu_calib_root', None),
+        )
         poses = np.loadtxt(pose_path).reshape(-1, 3, 4)
         paths = sorted((base / 'image_2').glob('*.png'))
         times_file = base / 'times.txt'
@@ -75,9 +125,17 @@ def index_kitti(args):
             if p.stem != f'{i:06d}':
                 raise ValueError(f'KITTI {seq_id} frame not contiguous at index {i}: {p}')
             T_WC2 = kitti_cam2_from_pose_cam0(pose, P0, P2)
-            frames.append(dict(timestamp_s=float(ts), pose=T_WC2.tolist(), raw_path=str(p.resolve())))
-        seqs += split_continuous(frames, 'kitti_' + seq_id, 'val' if seq_id in val else 'train',
-                                 'kitti', K, [0., 0., 0., 0., 0.])
+            T_WV = camera_to_vehicle_pose(T_WC2, T_vehicle_camera)
+            frames.append(dict(timestamp_s=float(ts), pose=T_WC2.tolist(),
+                               vehicle_pose=T_WV.tolist(), raw_path=str(p.resolve())))
+        new_seqs = split_continuous(frames, 'kitti_' + seq_id,
+                                    'val' if seq_id in val else 'train',
+                                    'kitti', K, [0., 0., 0., 0., 0.])
+        for s in new_seqs:
+            s['T_vehicle_camera'] = T_vehicle_camera.tolist()
+            s.update(extr_meta)
+            s['extrinsic_source'] = f'{extrinsic_calib_path}:Tr; P0,P2: {base / "calib.txt"}'
+        seqs.extend(new_seqs)
         print(f'KITTI {seq_id}: {len(frames)} frames', flush=True)
     return seqs
 
@@ -138,7 +196,14 @@ def index_waymo(args):
                         new_seqs = split_continuous(run, 'waymo_' + path.stem + f'_part{len(seqs)}',
                                                     split, 'waymo', K_ref.tolist(), dist_ref.tolist())
                         for s in new_seqs:
-                            s['T_vehicle_camera'] = T_VCam_ref.tolist()
+                            # 'pose' uses optical frame; extrinsic must use it too.
+                            T_cam_from_opt = np.eye(4, dtype=np.float64)
+                            T_cam_from_opt[:3, :3] = R_WAYMO_CAM_FROM_OPT
+                            s['T_vehicle_camera'] = (T_VCam_ref @ T_cam_from_opt).tolist()
+                            s['T_vehicle_camera_raw'] = T_VCam_ref.tolist()
+                            s['vehicle_frame'] = 'waymo_vehicle'
+                            s['vehicle_frame_note'] = 'Waymo vehicle frame, x forward, y left, z up'
+                            s['extrinsic_source'] = 'CameraCalibration.extrinsic + optical-axis conversion'
                         seqs += new_seqs
                     run = []
                 else:
@@ -154,7 +219,14 @@ def main():
     k.add_argument('--root', required=True)
     k.add_argument('--poses-root', default=None)
     k.add_argument('--val-seqs', default='09,10')
+    k.add_argument('--kitti-calib-root', default=None,
+                   help='Extracted official KITTI data_odometry_calib.zip; use when sequence calib.txt lacks Tr')
     k.add_argument('--max-seqs', type=int, default=0, help='0 means all 00..10')
+    k.add_argument('--kitti-frame', choices=['velodyne', 'imu'], default='velodyne',
+                   help='velodyne: available from Odometry calib, but NOT vehicle center. '
+                        'imu: requires matching KITTI RAW IMU calibration')
+    k.add_argument('--kitti-imu-calib-root', default=None,
+                   help='Root containing DATE/calib_imu_to_velo.txt or SEQ/calib_imu_to_velo.txt')
     k.add_argument('--out', required=True)
     w = sp.add_parser('waymo')
     w.add_argument('--root', required=True)

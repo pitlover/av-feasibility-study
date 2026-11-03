@@ -38,7 +38,10 @@ def test_prepared_online_and_model(tmp_path):
     K = np.array([[700.,0,640.],[0,700.,192.],[0,0,1.]])
     P0 = np.column_stack([K, np.zeros(3)])
     P2 = np.column_stack([K, K @ np.array([-0.54,0,0])])
-    (path / 'calib.txt').write_text('P0: ' + ' '.join(map(str, P0.flatten())) + '\nP2: ' + ' '.join(map(str, P2.flatten())) + '\n')
+    (path / 'calib.txt').write_text(''.join(
+        f'{name}: ' + ' '.join(map(str, matrix.flatten())) + '\n'
+        for name, matrix in [('P0', P0), ('P1', P0), ('P2', P2), ('P3', P2)]
+    ) + 'Tr: ' + ' '.join(map(str, np.eye(4)[:3, :].flatten())) + '\n')
     np.savetxt(path / 'times.txt', np.arange(4)*.1)
     poses = []
     for i in range(4):
@@ -120,3 +123,55 @@ def test_tfrecord_offsets(tmp_path):
     assert [x[1] for x in records]==payloads
     for off,payload in records:
         assert read_record(path,off)==payload
+
+
+def test_kitti_extrinsic_stored_and_imu_option(tmp_path):
+    from argparse import Namespace
+    from kitti_extrinsics import kitti_T_V_C2, camera_to_vehicle_pose
+    from geometry import kitti_cam2_from_pose_cam0
+    K = np.array([[700., 0., 640.], [0., 700., 190.], [0., 0., 1.]])
+    P0 = np.column_stack([K, np.zeros(3)])
+    P2 = np.column_stack([K, K @ np.array([-.54, 0., 0.])])
+    Tr = np.eye(4)[:3].copy()
+    cal = dict(P0=P0.flatten(), P2=P2.flatten(), Tr=Tr.flatten())
+    T_VC, meta = kitti_T_V_C2(cal, '00', 'velodyne')
+    assert meta['vehicle_frame'] == 'velodyne_proxy'
+    assert np.allclose(T_VC[:3, 3], [.54, 0, 0])
+    T_WC = kitti_cam2_from_pose_cam0(np.eye(4), P0, P2)
+    assert np.allclose(camera_to_vehicle_pose(T_WC, T_VC), np.eye(4))
+
+    imu_root = tmp_path / 'raw'
+    (imu_root / '2011_10_03').mkdir(parents=True)
+    (imu_root / '2011_10_03' / 'calib_imu_to_velo.txt').write_text(
+        'R: 1 0 0 0 1 0 0 0 1\nT: 1 0 0\n'
+    )
+    T_IMU_C2, meta = kitti_T_V_C2(cal, '00', 'imu', imu_root)
+    assert meta['vehicle_frame'] == 'imu'
+    assert np.allclose(T_IMU_C2[:3, 3], [-.46, 0, 0])
+    assert np.allclose(camera_to_vehicle_pose(T_WC, T_IMU_C2)[:3, 3], [1.,0,0])
+
+
+def test_waymo_optical_extrinsic_convention():
+    from geometry import waymo_optical_pose, R_WAYMO_CAM_FROM_OPT
+    T_WV = np.eye(4)
+    T_VCam = np.eye(4)
+    T_VCam[:3, 3] = [1.5, 0.1, 2.1]
+    T_Cam_Opt = np.eye(4)
+    T_Cam_Opt[:3, :3] = R_WAYMO_CAM_FROM_OPT
+    T_VC = T_VCam @ T_Cam_Opt
+    T_WC = waymo_optical_pose(T_WV, T_VCam)
+    assert np.allclose(T_WC, T_WV @ T_VC)
+    assert np.allclose(T_WC @ np.linalg.inv(T_VC), T_WV)
+
+
+def test_waymo_distortion_map_is_applied():
+    from camera import virtualize_bgr
+    from camera import K_VIRTUAL
+    image = np.zeros((384, 1280, 3), dtype=np.uint8)
+    image[:, :, 0] = np.arange(1280, dtype=np.uint16)[None, :] % 256
+    image[:, :, 1] = np.arange(384, dtype=np.uint16)[:, None] % 256
+    K = np.array([[850., 0, 640.], [0, 850., 192.], [0,0,1.]])
+    a, coverage_a = virtualize_bgr(image, K, [0.,0.,0.,0.,0.], min_valid=.1)
+    b, coverage_b = virtualize_bgr(image, K, [0.18,-0.05,.001,0.,0.], min_valid=.1)
+    assert a.shape == b.shape == (384,640,3)
+    assert np.abs(a.astype(float) - b.astype(float)).mean() > 0.5

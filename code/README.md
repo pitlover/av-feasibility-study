@@ -1,3 +1,7 @@
+# 최신 실행 경로 안내
+
+먼저 **[QUICKSTART_KO.md](QUICKSTART_KO.md)** 를 읽으세요. 이 문서에는 최신 `--kitti-calib-root` 경로와 Prepared/Online 명령어가 있습니다. 아래 내용은 상세 기술 설명과 이전 실행 예시를 포함합니다.
+
 # KITTI + Waymo: 두 가지 데이터 로딩 모드의 공통 Ego-Motion Baseline
 
 이 코드는 다음을 분리합니다.
@@ -224,3 +228,158 @@ python visualize.py --mode online \
 - `projection_video.mp4`: H.264 / yuv420p, 브라우저 재생 가능
 
 KITTI는 카메라 높이 1.65m와 평탄 지면의 근사치입니다. Waymo v3 인덱스는 Camera Extrinsic과 각 시점 Vehicle Pose까지 별도로 보유해, 카메라 설치 지점 아래의 **vehicle z=0 참조점**을 투영합니다(실측 도로면은 아님). 직접 TFRecord를 열 필요 없이 캐시된 원본 JPEG만으로도 시각화 가능합니다.
+
+---
+
+## 8. Extrinsic 포함 Manifest 생성 (추가 기능)
+
+**왜 추가하는가?** Camera Motion을 추정한 뒤 Vehicle-relative Action으로 옮기려면
+`T_vehicle_camera`가 있어야 한다. 여기서 행렬명은 `T_vehicle_camera`지만,
+**실제 기준 프레임이 무엇인지는 반드시 `vehicle_frame`으로 확인해야 한다.**
+모델 입력, loss, evaluation은 이번 버전에서도 기존처럼 Camera-relative Motion이다.
+이번 수정은 정확한 변환 정보를 Manifest에서 재사용할 수 있게 하는 것이다.
+
+### KITTI: 기존 Odometry Calibration만 있을 때 (별도 Raw 다운로드 필요 없음)
+
+```bash
+conda activate scene
+python build_index.py kitti \
+  --root /mnt/ufs/dataset/open-data/KITTI/Kitti-Odometry/dataset \
+  --poses-root /mnt/ufs/users/jaeha-lee/share/dataset/kitti/dataset/poses \
+  --kitti-frame velodyne \
+  --val-seqs 09,10 \
+  --out indexes/kitti.json
+```
+
+필수 파일:
+- `sequences/XX/calib.txt`: `P0`, `P2`, `Tr` (Velodyne → Camera 0)
+- `sequences/XX/image_2/*.png`
+- `poses/XX.txt` (별도 `--poses-root` 경로 허용)
+
+저장 내용: `vehicle_frame=velodyne_proxy`, `T_vehicle_camera` = **Cam2 optical → Velodyne**, 
+`vehicle_pose` = Velodyne 기준의 Global Pose. **이는 실제 차량 중심/후륜축 원점이 아니다.**
+따라서 Waymo Vehicle Frame과 동일 원점의 GT라고 간주하면 안 된다.
+
+### KITTI: IMU 기준으로 만들기 (추가 Raw Calibration 준비 시)
+
+해당 Sequence의 Raw 녹화일자에 대응하는 `calib_imu_to_velo.txt`를 다음처럼 보관한다.
+
+```text
+/mnt/ufs/dataset/open-data/KITTI/raw-calib/
+  2011_10_03/calib_imu_to_velo.txt
+  2011_09_26/calib_imu_to_velo.txt
+  2011_09_30/calib_imu_to_velo.txt
+```
+
+이 RAW Calibration은 odometry 이미지 전체를 다운로드할 필요 없이 KITTI Raw Data 사이트에서 날짜별 Calibration만 확보하면 된다.
+
+```bash
+python build_index.py kitti \
+  --root /mnt/ufs/dataset/open-data/KITTI/Kitti-Odometry/dataset \
+  --poses-root /mnt/ufs/users/jaeha-lee/share/dataset/kitti/dataset/poses \
+  --kitti-frame imu \
+  --kitti-imu-calib-root /mnt/ufs/dataset/open-data/KITTI/raw-calib \
+  --out indexes/kitti_imu.json
+```
+
+이 경우 `vehicle_frame=imu`, `T_vehicle_camera` = Cam2 optical → IMU, `vehicle_pose` = IMU 기준 Global Pose.
+KITTI IMU도 자차 후륜축 중심과 같은 것은 아니며 Waymo와 기준 원점 차이를 감안해야 한다.
+
+### Waymo: 카메라 Optical Frame과 일치하는 Extrinsic 추가
+
+```bash
+conda activate waymo-prep
+python build_index.py waymo \
+  --root /mnt/ufs/dataset/open-data/waymo/perception \
+  --max-files-per-split 5 \
+  --raw-jpeg-cache cache/waymo_original_jpeg \
+  --out indexes/waymo.json
+conda activate scene
+```
+
+- `T_vehicle_camera_raw`: Waymo 카메라 원래 좌표축 → Waymo Vehicle
+- `T_vehicle_camera`: **Optical Camera → Waymo Vehicle** (모델의 Camera GT와 동일 프레임)
+- `vehicle_frame=waymo_vehicle`, `vehicle_pose`는 촬영 시점 차량 GT
+
+### Manifest 추가 필드
+
+```json
+{
+  "name": "kitti_00_0",
+  "source": "kitti",
+  "vehicle_frame": "velodyne_proxy",
+  "vehicle_frame_note": "LiDAR origin, not physical ego center",
+  "extrinsic_source": "odometry/calib.txt:Tr,P0,P2",
+  "T_vehicle_camera": [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
+  "frames": [
+    {"pose": [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
+     "vehicle_pose": [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]}
+  ]
+}
+```
+
+예시는 JSON 필드 형태만 표시한 것이며 **행렬값은 실제 Calibration에서 계산한 값을 사용한다.**
+`pose`는 여전히 Camera Optical → World이며, 카메라 상대 모션 학습에 사용된다.
+
+### Prepared Mode: 기존 Virtual JPG 재사용
+
+먼저 위 `build_index.py`를 **다시 실행**해 Extrinsic을 포함한 `indexes/*.json`을 만든다.
+그다음 `materialize.py`를 실행한다. `--overwrite`를 지정하지 않으면
+**이미 존재하는 640×384 Virtual JPEG는 덮어쓰지 않고**, 새 `prepared_manifest.json`에
+추가 메타데이터만 반영한다. 기존 저장 폴더 경로와 순서가 같다는 전제이며,
+Virtual Camera 설정(45°, 640×384)을 바꾼 적이 있다면 재생성해야 한다.
+
+```bash
+python materialize.py --index indexes/kitti.json \
+  --out-dir processed/kitti --manifest manifests/kitti_prepared.json
+python materialize.py --index indexes/waymo.json \
+  --out-dir processed/waymo --manifest manifests/waymo_prepared.json
+```
+
+### 검증
+
+```bash
+python validate_extrinsics.py --manifest indexes/kitti.json
+python validate_extrinsics.py --manifest indexes/waymo.json
+python -m pytest -q tests/
+```
+
+정상이라면 `T_WC ≈ T_WV @ T_VC`가 두 데이터셋에서 성립한다.
+이 테스트는 **계산된 변환끼리의 수학적 일관성**을 확인하며,
+원본 센서 캘리브레이션의 정확도까지 입증하지는 않는다.
+
+### Waymo 왜곡 보정 적용 위치
+
+- `build_index.py`: `cam.intrinsic`에서 `[fx,fy,cx,cy,k1,k2,p1,p2,k3]`를 읽어
+  `K_src`, `distortion` 저장
+- `camera.py`: `cv2.initUndistortRectifyMap(K_src, distortion, R=I, newCameraMatrix=K_virtual, ...)`
+  → `cv2.remap`으로 유효 픽셀 검사 및 왜곡 제거/Virtual Warp 수행
+- `materialize.py`: Prepared Mode에서 위 보정 결과를 JPEG로 저장
+- `datasets.py`: Online Mode에서 매번 위 보정을 실행
+
+KITTI `image_2`는 이미 rectified 이미지이므로 `distortion=[0,0,0,0,0]`을 사용한다.
+Waymo의 방사/접선 왜곡 계수는 OpenCV 포맷과 일치하지만, rolling-shutter 모션 왜곡은 별도 문제다.
+
+## KITTI `calib.txt`에 `P0`~`P3`만 있는 경우 (2026-11 수정)
+
+이번 버전 `build_index.py`에 `--kitti-calib-root` 옵션을 추가했습니다. 원본 이미지 디렉터리의 calibration은 수정하지 않습니다. 원본에 `Tr`이 없다면 **공식 KITTI Odometry calibration ZIP에서 해당 sequence의 `Tr`을 읽고, 원본 `P0`~`P3`와 값이 맞는지 검사한 후** Extrinsic을 계산합니다. 값이 맞지 않으면 명시적으로 오류를 발생시킵니다. 빈 `Tr`, 임의의 항등행렬로 대체하지 않습니다.
+
+```bash
+cd /mnt/ufs/dataset/open-data/KITTI
+wget -c https://s3.eu-central-1.amazonaws.com/avg-kitti/data_odometry_calib.zip
+mkdir -p odometry_calib_extra
+unzip -n data_odometry_calib.zip -d odometry_calib_extra
+
+# 먼저 zip 내부 경로 확인
+unzip -l data_odometry_calib.zip | head -30
+
+python build_index.py kitti \
+  --root /mnt/ufs/dataset/open-data/KITTI/Kitti-Odometry/dataset \
+  --poses-root /mnt/ufs/users/jaeha-lee/share/dataset/kitti/dataset/poses \
+  --kitti-calib-root /mnt/ufs/dataset/open-data/KITTI/odometry_calib_extra \
+  --kitti-frame velodyne \
+  --val-seqs 09,10 \
+  --out indexes/kitti.json
+```
+
+참고: `--kitti-frame velodyne`의 'vehicle'은 실제 자차 중심이 아니라 **LiDAR 기준 proxy**입니다. Camera-only VO/IDM 학습은 `P0`~`P3`만으로도 가능하지만 이 버전의 vehicle-enabled 인덱서는 `Tr`을 요구합니다.
