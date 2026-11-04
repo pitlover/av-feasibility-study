@@ -102,7 +102,7 @@ def index_kitti(args):
             print(f'SKIP missing KITTI {seq_id} folder or GT pose')
             continue
         calib, extrinsic_calib_path = resolve_kitti_odometry_calibration(
-            base, seq_id, getattr(args, "kitti_calib_root", None)
+            base, seq_id, getattr(args, 'kitti_calib_root', None)
         )
         P0 = calib['P0'].reshape(3, 4)
         P2 = calib['P2'].reshape(3, 4)
@@ -228,6 +228,18 @@ def main():
     k.add_argument('--kitti-imu-calib-root', default=None,
                    help='Root containing DATE/calib_imu_to_velo.txt or SEQ/calib_imu_to_velo.txt')
     k.add_argument('--out', required=True)
+    a = sp.add_parser('av2', help='Argoverse 2 Sensor dataset; 20Hz -> 10Hz camera+pose')
+    a.add_argument('--root', required=True, help='Directory containing train/<logid>, val/<logid>')
+    a.add_argument('--av2-camera', choices=['stereo_front_left', 'stereo_front_right',
+                    'ring_front_center', 'ring_front_left', 'ring_front_right'],
+                   default='stereo_front_left',
+                   help='Default matches OpenVO; ring_front_center is also supported')
+    a.add_argument('--av2-fps', type=int, choices=[10, 20], default=10,
+                   help='Use 10 Hz for shared KITTI+Waymo baseline, or 20 Hz ablation')
+    a.add_argument('--max-logs-per-split', type=int, default=5, help='0 = all logs')
+    a.add_argument('--av2-max-pose-gap-ms', type=float, default=150.0)
+    a.add_argument('--strict', action='store_true', help='Fail fast on malformed AV2 log')
+    a.add_argument('--out', required=True)
     w = sp.add_parser('waymo')
     w.add_argument('--root', required=True)
     w.add_argument('--max-files-per-split', type=int, default=5, help='0 means all files')
@@ -237,7 +249,15 @@ def main():
     w.add_argument('--strict', action='store_true')
     w.add_argument('--out', required=True)
     args = p.parse_args()
-    sequences = index_kitti(args) if args.dataset == 'kitti' else index_waymo(args)
+    if args.dataset == 'kitti':
+        sequences = index_kitti(args)
+    elif args.dataset == 'waymo':
+        sequences = index_waymo(args)
+    elif args.dataset == 'av2':
+        from av2_loader import index_av2
+        sequences = index_av2(args)
+    else:
+        raise ValueError(f'Unsupported dataset: {args.dataset}')
     if not sequences:
         raise RuntimeError('No usable sequences indexed')
     manifest = dict(format_version=3, stage='raw', camera=camera_metadata(), sequences=sequences)

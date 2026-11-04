@@ -22,7 +22,7 @@ from datasets import load_manifest, load_virtual_bgr, select_sequences
 
 def road_reference_points(seq, frames, dataset, height_m):
     poses = np.asarray([f['pose'] for f in frames], dtype=np.float64)
-    if dataset == 'waymo' and 'T_vehicle_camera' in seq and all('vehicle_pose' in f for f in frames):
+    if dataset in ('waymo', 'av2') and 'T_vehicle_camera' in seq and all('vehicle_pose' in f for f in frames):
         TvC = np.asarray(seq['T_vehicle_camera'], dtype=np.float64)
         # Under camera mount (same vehicle XY), vehicle z=0 reference plane.
         veh_point = np.array([TvC[0, 3], TvC[1, 3], 0., 1.])

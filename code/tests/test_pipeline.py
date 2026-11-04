@@ -38,10 +38,7 @@ def test_prepared_online_and_model(tmp_path):
     K = np.array([[700.,0,640.],[0,700.,192.],[0,0,1.]])
     P0 = np.column_stack([K, np.zeros(3)])
     P2 = np.column_stack([K, K @ np.array([-0.54,0,0])])
-    (path / 'calib.txt').write_text(''.join(
-        f'{name}: ' + ' '.join(map(str, matrix.flatten())) + '\n'
-        for name, matrix in [('P0', P0), ('P1', P0), ('P2', P2), ('P3', P2)]
-    ) + 'Tr: ' + ' '.join(map(str, np.eye(4)[:3, :].flatten())) + '\n')
+    (path / 'calib.txt').write_text('P0: ' + ' '.join(map(str, P0.flatten())) + '\nP1: ' + ' '.join(map(str, P0.flatten())) + '\nP2: ' + ' '.join(map(str, P2.flatten())) + '\nP3: ' + ' '.join(map(str, P2.flatten())) + '\nTr: ' + ' '.join(map(str, np.eye(4)[:3, :].flatten())) + '\n')
     np.savetxt(path / 'times.txt', np.arange(4)*.1)
     poses = []
     for i in range(4):
