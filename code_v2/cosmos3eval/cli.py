@@ -40,9 +40,14 @@ def export_cmd(a):
     if not ckpt.is_dir():raise FileNotFoundError(f'DCP directory: {ckpt}')
     if not config.is_file():raise FileNotFoundError(f'Training config.yaml: {config}')
     root,_=_framework_env(a.framework_root)
+    out=Path(a.out).expanduser().resolve()
+    # Use one predictable sidecar per export. Never modify training config.yaml.
+    compat=out.parent/(out.name+'.export_config.yaml')
+    prep=[sys.executable,'-m','cosmos3eval.export_compat',
+          '--input',str(config),'--output',str(compat)]
+    _call(prep,root,a.execute)
     cmd=[sys.executable,'-m','cosmos_framework.scripts.export_model',
-         '--checkpoint-path',str(ckpt),'--config-file',str(config),
-         '-o',str(Path(a.out).expanduser().resolve())]
+         '--checkpoint-path',str(ckpt),'--config-file',str(compat),'-o',str(out)]
     _call(cmd,root,a.execute)
 
 
@@ -85,6 +90,16 @@ def compare_cmd(a):
     compare(a.summaries,a.out)
 
 
+def render_cmd(a):
+    from .render import render_selection
+    outdir = a.out_dir if a.out_dir else str(Path(a.pred_dir) / 'qualitative')
+    render_selection(a.eval_dir, a.pred_dir, outdir,
+        clip_id=a.clip_id, max_clips=a.max_clips, fps=a.fps, crf=a.crf,
+        layout=a.layout, ego_height_m=a.ego_height_m,
+        horizon_steps=a.horizon_steps, line_thickness=a.line_thickness,
+        model_name=a.model)
+
+
 def main(argv=None):
     ap=argparse.ArgumentParser(description='Cosmos3-Edge AV inverse dynamics: inference + RRE/RTE/ATE')
     sub=ap.add_subparsers(dest='command',required=True)
@@ -95,7 +110,7 @@ def main(argv=None):
     p.add_argument('--max-clips-per-dataset',type=int,default=3,help='0=all')
     p.add_argument('--seed',type=int,default=0);p.add_argument('--force',action='store_true')
     p.set_defaults(func=prep_cmd)
-    e=sub.add_parser('export',help='Export training DCP to official Cosmos inference checkpoint')
+    e=sub.add_parser('export',help='Auto-normalize training config and export DCP to Cosmos inference checkpoint')
     e.add_argument('--framework-root',required=True);e.add_argument('--dcp',required=True)
     e.add_argument('--config',required=True,help='training output config.yaml, NOT sft_config.toml')
     e.add_argument('--out',required=True);e.add_argument('--execute',action='store_true')
@@ -115,7 +130,26 @@ def main(argv=None):
     c=sub.add_parser('compare',help='Combine score summaries from identically selected clips')
     c.add_argument('--summaries',nargs='+',required=True);c.add_argument('--out',required=True)
     c.set_defaults(func=compare_cmd)
+    r=sub.add_parser('render',help='Qualitative GT vs Pred: camera-projected paths and/or BEV (CPU only)')
+    r.add_argument('--eval-dir',required=True);r.add_argument('--pred-dir',required=True)
+    r.add_argument('--out-dir',help='Default: <pred-dir>/qualitative')
+    r.add_argument('--model',help='Optional model label shown in overlay')
+    r.add_argument('--clip-id')
+    r.add_argument('--max-clips',type=int,default=0,help='0=all selected clips')
+    r.add_argument('--fps',type=float,default=10.0);r.add_argument('--crf',type=int,default=18)
+    r.add_argument('--layout',choices=['inset','side','projected','both'],default='both',
+                   help='projected: paths on video; both: paths + BEV side panel')
+    r.add_argument('--ego-height-m',type=float,default=None,
+                   help='Ego origin above road (KITTI Velodyne default estimate 1.7 m, others 0)')
+    r.add_argument('--horizon-steps',type=int,default=30,
+                   help='Project observed-sequence path for next N steps')
+    r.add_argument('--line-thickness',type=int,default=3)
+    r.set_defaults(func=render_cmd)
     a=ap.parse_args(argv)
+    if a.command=='render' and (a.fps<=0 or not 0<=a.crf<=51 or a.max_clips<0 or
+                                not 1<=a.horizon_steps<=60 or a.line_thickness<1 or
+                                a.line_thickness>12):
+        ap.error('render: fps>0, crf 0..51, max-clips>=0, horizon-steps 1..60, line-thickness 1..12')
     if a.command=='prepare' and a.max_clips_per_dataset<0:ap.error('--max-clips-per-dataset must be >=0')
     a.func(a)
 
