@@ -4,6 +4,7 @@ Camera X right, Y down, Z forward. Ground projection assumes a local flat
 road plane and approximated camera height. Do not project camera centers.
 """
 import json
+import subprocess
 from pathlib import Path
 import cv2
 import numpy as np
@@ -73,34 +74,67 @@ def render_camera_clip(row,pred_dir,out_path,*,ground_height_m=None,max_depth_m=
     a,_=load_pred(pred_dir,row['clip_id'])
     pred=decode_actions(a,meta['pose_convention']);gt=info['gt_pose']
     m=metrics(gt,pred)
+    # Decode and render all 61 frames before encoding. This avoids silently
+    # emitting a one-frame MP4 if an installed generator stops early.
     cap=cv2.VideoCapture(str(row['video']))
-    if not cap.isOpened():raise OSError(row['video'])
-    w,h=int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    bev_size=min(h,280,max(80,int(h*.56)))
-    out_w=w+bev_size if layout=='both' else w
-    out_w+=out_w%2;out_h=h+(h%2)
-    def frames():
+    if not cap.isOpened():
+        raise OSError(f"Cannot open source video: {row['video']}")
+    source_frames=[]
+    try:
         for i in range(61):
             ok,frame=cap.read()
-            if not ok:raise ValueError('Input MP4 has fewer than 61 frames')
-            if layout!='bev':
-                _draw_road(frame,gt,i,K,GT_COLOR,ground_height_m=ground_height_m,max_depth=max_depth_m,horizon_steps=horizon_steps)
-                _draw_road(frame,pred,i,K,PRED_COLOR,ground_height_m=ground_height_m,max_depth=max_depth_m,horizon_steps=horizon_steps)
-            canvas=np.full((out_h,out_w,3),245,np.uint8)
-            canvas[:h,:w]=frame
-            bev=_bev(gt,pred,i,bev_size)
-            if layout=='both':
-                canvas[:bev_size,w:w+bev_size]=bev
-                text=[f'Frame {i:02d}/60',f'Position error {m["ate_m"][i]:.3f} m',
-                      f'Rotation error {m["abs_rot_deg"][i]:.3f} deg',
-                      f'RRE {np.mean(m["rre_deg"][:max(i,1)]):.3f} deg',
-                      f'RTE {np.mean(m["rte_m"][:max(i,1)]):.3f} m']
-                for j,line in enumerate(text):
-                    cv2.putText(canvas,line,(w+10,bev_size+25+j*25),cv2.FONT_HERSHEY_SIMPLEX,.47,(25,25,25),1,cv2.LINE_AA)
-            elif layout=='bev':canvas[:bev_size,:bev_size]=bev
-            yield canvas
-    try:_encode_h264(frames(),out_path,fps,out_w,out_h,crf)
-    finally:cap.release()
+            if not ok or frame is None:
+                raise ValueError(f"Input MP4 ended after {i}/61 frames: {row['video']}")
+            source_frames.append(frame)
+    finally:
+        cap.release()
+    print(f"[SOURCE FRAMES] {len(source_frames)}",flush=True)
+
+    h,w=source_frames[0].shape[:2]
+    bev_size=min(h,280,max(80,int(h*.56)))
+    out_w=w+bev_size if layout=='both' else w
+    out_w+=out_w%2
+    out_h=h+(h%2)
+    rendered=[]
+    for i,frame in enumerate(source_frames):
+        if layout!='bev':
+            _draw_road(frame,gt,i,K,GT_COLOR,ground_height_m=ground_height_m,
+                       max_depth=max_depth_m,horizon_steps=horizon_steps)
+            _draw_road(frame,pred,i,K,PRED_COLOR,ground_height_m=ground_height_m,
+                       max_depth=max_depth_m,horizon_steps=horizon_steps)
+        canvas=np.full((out_h,out_w,3),245,np.uint8)
+        canvas[:h,:w]=frame
+        bev=_bev(gt,pred,i,bev_size)
+        if layout=='both':
+            canvas[:bev_size,w:w+bev_size]=bev
+            lines=[f'Frame {i:02d}/60',f'Position error {m["ate_m"][i]:.3f} m',
+                   f'Rotation error {m["abs_rot_deg"][i]:.3f} deg',
+                   f'RRE {np.mean(m["rre_deg"][:max(i,1)]):.3f} deg',
+                   f'RTE {np.mean(m["rte_m"][:max(i,1)]):.3f} m']
+            for j,line in enumerate(lines):
+                cv2.putText(canvas,line,(w+10,bev_size+25+j*25),
+                            cv2.FONT_HERSHEY_SIMPLEX,.47,(25,25,25),1,cv2.LINE_AA)
+        elif layout=='bev':
+            canvas[:bev_size,:bev_size]=bev
+        rendered.append(canvas)
+
+    if len(rendered)!=61:
+        raise RuntimeError(f"Renderer produced {len(rendered)} frames, expected 61")
+    print(f"[RENDERED FRAMES] {len(rendered)}",flush=True)
+    _encode_h264(rendered,out_path,fps,out_w,out_h,crf)
+
+    # Do not report success for an MP4 containing only its first frame.
+    probe=subprocess.run(
+        ['ffprobe','-v','error','-select_streams','v:0','-count_frames',
+         '-show_entries','stream=nb_read_frames,duration,r_frame_rate',
+         '-of','json',str(out_path)],
+        text=True,capture_output=True,check=True)
+    streams=json.loads(probe.stdout).get('streams',[])
+    encoded=int(streams[0].get('nb_read_frames','0')) if streams else 0
+    if encoded!=61:
+        raise RuntimeError(f"Encoded {encoded}/61 frames: {out_path}")
+    print(f"[VIDEO OK] frames={encoded} fps={streams[0].get('r_frame_rate')} "
+          f"duration={streams[0].get('duration')} path={out_path}",flush=True)
     return dict(clip_id=row['clip_id'],final_position_error_m=float(m['ate_m'][-1]),
                 final_rotation_error_deg=float(m['abs_rot_deg'][-1]),
                 mean_step_rre_deg=float(m['rre_deg'].mean()),
