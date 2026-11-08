@@ -40,7 +40,8 @@ def verify_row(r, *, pose_tol_m=.01, pose_tol_deg=.1):
         raise ValueError(f'{cid}: unrecognized action encoding {m.get("action_encoding")}')
     if m.get('fps')!=10 or m.get('frame_count')!=61 or m.get('action_count')!=60:
         raise ValueError(f'{cid}: expected 10fps, 61 frames, 60 actions')
-    gt=check_pose_array(np.load(meta.parent/'poses_local_ego.npy',allow_pickle=False))
+    pose_filename = m.get('evaluation_pose_file', m.get('pose_local_file','poses_local_ego.npy'))
+    gt=check_pose_array(np.load(meta.parent/pose_filename,allow_pickle=False))
     acts=check_actions(np.load(action,allow_pickle=False))
     reconstructed=decode_actions(acts)
     max_pos=float(np.max(np.linalg.norm(gt[:,:3,3]-reconstructed[:,:3,3],axis=-1)))

@@ -8,16 +8,18 @@ from .geometry import decode_actions,metrics
 from .predictions import load_pred
 
 
-def _plot(gt, pred, title, path):
+def _plot(gt, pred, title, path, frame="ego"):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     path=Path(path)
     fig,ax=plt.subplots(figsize=(7,6))
-    ax.plot(gt[:,0,3],gt[:,1,3],label='GT',linewidth=2)
-    ax.plot(pred[:,0,3],pred[:,1,3],label='Cosmos prediction',linewidth=2)
+    x, y = (0,2) if frame == 'virtual_camera' else (0,1)
+    ax.plot(gt[:,x,3],gt[:,y,3],label='GT',linewidth=2)
+    ax.plot(pred[:,x,3],pred[:,y,3],label='Cosmos prediction',linewidth=2)
     ax.scatter([0],[0],marker='o',s=35,label='Start')
-    ax.set_xlabel('ego X, forward (m)'); ax.set_ylabel('ego Y, left (m)')
+    ax.set_xlabel('camera X right (m)' if frame == 'virtual_camera' else 'ego X forward (m)')
+    ax.set_ylabel('camera Z forward (m)' if frame == 'virtual_camera' else 'ego Y left (m)')
     ax.set_title(title);ax.axis('equal');ax.grid(alpha=.3);ax.legend()
     fig.tight_layout();fig.savefig(path,dpi=140);plt.close(fig)
 
@@ -65,7 +67,7 @@ def score(eval_dir,pred_dir,out=None,model='stage1',allow_padded=False,plots=Tru
                     rre_deg=(float(ms['rre_deg'][i-1]) if i else ''),
                     rte_m=(float(ms['rte_m'][i-1]) if i else '')))
             np.save(out/'trajectories'/f'{cid}_pred.npy',pred)
-            if plots: _plot(gt,pred,f'{model} | {cid}',out/f'bev_{cid}.png')
+            if plots: _plot(gt,pred,f'{model} | {cid}',out/f'bev_{cid}.png',frame=info['metadata']['pose_frame'])
             print(f'[OK] {cid}: RRE={per["rre_deg_mean"]:.4f}deg, RTE={per["rte_m_mean"]:.4f}m, ATE={per["ate_m_rmse"]:.4f}m')
         except Exception as e:
             failures.append(dict(clip_id=cid,error=str(e)))

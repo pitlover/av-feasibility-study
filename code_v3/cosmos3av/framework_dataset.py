@@ -6,6 +6,7 @@ WARNING: experimentally composed adapter; framework and model weights must be te
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -19,7 +20,16 @@ class AVInverseDataset(Dataset):
         if not self.items:
             raise ValueError(f'No clips in {manifest}')
         self.max_dt_error_s = float(max_dt_error_s)
+        # A globally shared stage-1 train-only normalizer; stage2 must reuse it.
+        from cosmos3virtual.normalization import read_norm
+        self.action_normalizer = read_norm(os.environ.get('COSMOS_AV_ACTION_NORMALIZER') or None)
         self.validate_on_load = validate_on_load
+        if self.action_normalizer is not None:
+            norm_sha=os.environ.get('COSMOS_AV_ACTION_NORMALIZER_SHA256')
+            if norm_sha:
+                import hashlib
+                if hashlib.sha256(Path(os.environ['COSMOS_AV_ACTION_NORMALIZER']).read_bytes()).hexdigest()!=norm_sha:
+                    raise RuntimeError('Action normalizer changed since plan: refuse to train')
 
     def __len__(self):
         return len(self.items)
@@ -35,7 +45,7 @@ class AVInverseDataset(Dataset):
 
         row = self.items[idx]
         if self.validate_on_load:
-            preflight(row, max_dt_error_s=self.max_dt_error_s)
+            preflight(row, max_dt_error_s=self.max_dt_error_s, require_exact_10hz=False)
         video_path = row['video']
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
@@ -53,6 +63,12 @@ class AVInverseDataset(Dataset):
         rgb = np.stack(frames)                             # T,H,W,C uint8
         video = torch.from_numpy(rgb).permute(3,0,1,2).contiguous() # C,T,H,W uint8
         actions = np.load(row['action_file'], allow_pickle=False)
+        if self.action_normalizer is not None:
+            m = json.loads(Path(row['meta']).read_text())
+            if m.get('pose_frame') != 'virtual_camera':
+                raise ValueError(f'{row["clip_id"]}: normalized dataset must be virtual_camera')
+            from cosmos3virtual.normalization import transform_action
+            actions = transform_action(actions, self.action_normalizer).astype(np.float32)
         if actions.shape != (60,9):
             raise ValueError(f'Expected 60x9 GT action: {row["clip_id"]}')
         return {

@@ -37,7 +37,8 @@ def load_index(root: Path) -> list[dict]:
     return rows
 
 
-def preflight(r: dict, *, max_dt_error_s: float = 0.07, check_video: bool = False) -> dict:
+def preflight(r: dict, *, max_dt_error_s: float = 0.07, check_video: bool = False,
+              require_exact_10hz: bool = False) -> dict:
     """Reject missing, malformed, inconsistent or out-of-time clips (strict at runtime)."""
     paths = {k: Path(r[k]).expanduser() for k in ('video', 'action_file', 'meta')}
     for k, p in paths.items():
@@ -63,6 +64,13 @@ def preflight(r: dict, *, max_dt_error_s: float = 0.07, check_video: bool = Fals
     if ts.shape != (N_FRAMES,) or not np.isfinite(ts).all() or not np.all(np.diff(ts) > 0):
         raise ValueError(f'{r["clip_id"]}: missing/nonmonotonic timestamps')
     dt = np.diff(ts)
+    if require_exact_10hz:
+        if meta.get('time_mode')!='exact' or not meta.get('exact_gt_10hz'):
+            raise ValueError(f'{r["clip_id"]}: requires v2 time_mode=exact; found {meta.get("time_mode")}')
+        if np.max(np.abs(dt-.1)) > 1e-5:
+            raise ValueError(f'{r["clip_id"]}: target timestamps are not exact 100ms')
+        if not (paths['meta'].parent/'source_time_brackets_s.npy').is_file():
+            raise ValueError(f'{r["clip_id"]}: missing source timing provenance')
     # Native KITTI can differ from exact nominal 10Hz; flag unacceptable large gaps.
     if float(np.abs(dt - 0.1).max()) > max_dt_error_s:
         raise ValueError(f'{r["clip_id"]}: max |dt-0.1|={np.abs(dt - 0.1).max():.4f}s')

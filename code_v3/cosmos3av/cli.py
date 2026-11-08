@@ -1,6 +1,7 @@
 """Stage-aware Cosmos3-Edge AV ID dataset and launch-plan generator."""
 from __future__ import annotations
 import argparse
+import hashlib
 import json
 import os
 import shlex
@@ -91,7 +92,62 @@ def plan(args):
     vae = Path(args.wan_vae).expanduser().resolve()
     if not vae.is_file():
         raise FileNotFoundError(f'Wan VAE checkpoint missing: {vae}')
+    # Stage 2 must inherit the SAME action scaling (or explicitly none) as Stage 1.
+    # Matching the action shape is not enough: relative translation units must be stable.
+    stage1_run = None
+    stage1_norm_hash = None
+    stage1_norm_path = None
+    if args.stage == 'posttrain':
+        if not args.stage1_run:
+            raise ValueError('Stage 2 requires --stage1-run for frozen normalizer and stage continuity')
+        stage1_run = Path(args.stage1_run).resolve()
+        stage1_info = json.loads((stage1_run/'run.json').read_text())
+        if stage1_info.get('stage') != 'pretrain':
+            raise ValueError('--stage1-run must point to an actual Stage 1 plan')
+        stage1_norm_path = stage1_info.get('action_normalizer')
+        stage1_norm_hash = stage1_info.get('action_normalizer_sha256')
+        if stage1_norm_path:
+            if not Path(stage1_norm_path).is_file():
+                raise FileNotFoundError(f'Stage1 normalizer missing: {stage1_norm_path}')
+            actual_hash = hashlib.sha256(Path(stage1_norm_path).read_bytes()).hexdigest()
+            if stage1_norm_hash and actual_hash != stage1_norm_hash:
+                raise ValueError('Stage1 normalizer was changed after training; refusing silent rescaling')
+            if args.action_normalizer and hashlib.sha256(Path(args.action_normalizer).read_bytes()).hexdigest() != actual_hash:
+                raise ValueError('Stage2 cannot fit/switch normalizer: must reuse original Stage1 statistics')
+            args.action_normalizer = stage1_norm_path
+            if not args.ack_custom_action_normalizer:
+                raise ValueError('Stage1 used custom statistics; pass --ack-custom-action-normalizer for Stage2')
+        elif args.action_normalizer:
+            raise ValueError('Stage1 used raw actions; Stage2 must also use raw actions')
+        # Guard a common mistake: initializing posttrain from the original Edge instead of Stage1 DCP.
+        stage1_output_root = (stage1_run/'outputs').resolve()
+        init_path = Path(args.init_checkpoint).resolve()
+        if not init_path.is_relative_to(stage1_output_root) and not args.allow_external_stage1_checkpoint:
+            raise ValueError('Stage2 --init-checkpoint must refer to Stage1 outputs; '
+                             'use --allow-external-stage1-checkpoint if intentionally copied elsewhere')
+
+    action_norm = None
+    if args.action_normalizer:
+        from cosmos3virtual.normalization import read_norm
+        norm_path = Path(args.action_normalizer).expanduser().resolve()
+        read_norm(norm_path)
+        action_norm = str(norm_path)
+        # Avoid silent mismatch when mixing pretraining checkpoint and custom stats.
+        if not args.ack_custom_action_normalizer:
+            raise RuntimeError('This is a custom action normalizer, NOT verified as the NVIDIA Cosmos3-Edge pretrained contract. Pass --ack-custom-action-normalizer to make that experiment explicit.')
+        for r in train_rows + val_rows:
+            m = json.loads(Path(r['meta']).read_text())
+            if m.get('pose_frame') != 'virtual_camera':
+                raise ValueError('Normalized training requires virtual_camera GT and videos')
     run_dir.mkdir(parents=True, exist_ok=True)
+    if action_norm:
+        # Make experiment self-contained and immutable even if user later moves
+        # the originally fitted normalizer JSON.
+        import shutil
+        stored = run_dir / 'action_normalizer.json'
+        if Path(action_norm) != stored:
+            shutil.copy2(action_norm, stored)
+        action_norm = str(stored)
     print(f'[source] available {dict(Counter((r["dataset"],r["split"]) for r in rows))}')
     print(f'[stage] {args.stage}, selected={selected}, weights={weights}')
     for ds in selected:
@@ -99,12 +155,25 @@ def plan(args):
     subset = train_rows if args.full_preflight else train_rows[:min(50, len(train_rows))]
     worst = 0.0
     for r in subset:
-        q = preflight(r, max_dt_error_s=args.max_dt_error_s, check_video=args.check_video)
+        q = preflight(r, max_dt_error_s=args.max_dt_error_s, check_video=args.check_video, require_exact_10hz=False)
         worst = max(worst, q['max_dt_error_s'])
     print(f'[preflight] checked={len(subset)} worst_dt_error_s={worst:.4f}')
+    print('[TIMEBASE] Native timestamps/GT are retained. 10fps MP4 does NOT guarantee 100ms physical frame intervals.')
+    # Same virtual K/FOV across every dataset in this run, not just identical size.
+    reference = None
+    for row in train_rows + val_rows:
+        m=json.loads(Path(row['meta']).read_text())
+        if m.get('pose_frame') != 'virtual_camera':
+            raise ValueError(f'{row["clip_id"]}: non-virtual-camera label')
+        if m.get('time_mode') != 'native' or int(m.get('synthetic_rgb_frames',0)) != 0:
+            raise ValueError(f'{row["clip_id"]}: this baseline requires real captured frames (time_mode=native)')
+        signature=(tuple(np.asarray(m['K_virtual']).reshape(-1).round(6)),
+                   tuple(m['video_size_wh']),float(m['virtual_hfov_deg']))
+        if reference is None:reference=signature
+        elif signature != reference:raise ValueError(f'{row["clip_id"]}: mixed virtual camera intrinsics/FOV')
     samples = mix_rows(train_rows, weights, args.epoch_clips, args.seed)
     for r in val_rows[:min(20, len(val_rows))]:
-        preflight(r, max_dt_error_s=args.max_dt_error_s, check_video=False)
+        preflight(r, max_dt_error_s=args.max_dt_error_s, check_video=False, require_exact_10hz=False)
     manifest = run_dir / 'train.jsonl'
     write_jsonl(manifest, samples)
     write_jsonl(run_dir / 'val.jsonl', val_rows)
@@ -114,7 +183,11 @@ def plan(args):
         init_checkpoint=str(ckpt), wan_vae=str(vae), processed_root=str(root),
         train_manifest=str(manifest), val_manifest=str(run_dir/'val.jsonl'),
         n_train=len(samples), n_val=len(val_rows), gpus=args.gpus,
-        max_dt_error_s=args.max_dt_error_s,
+        max_dt_error_s=args.max_dt_error_s, action_normalizer=action_norm,
+        action_normalizer_sha256=hashlib.sha256(Path(action_norm).read_bytes()).hexdigest() if action_norm else None,
+        stage1_run=str(stage1_run) if stage1_run else None,
+        time_contract='native_measured_exposures_nominal_10fps',
+        action_coordinate_frame='virtual_camera_optical_xyz',
         caveat='EXPERIMENTAL: AV ID is not an NVIDIA validated SFT recipe; checkpoint action norm and head compatibility must be tested.',
     )
     (run_dir / 'run.json').write_text(json.dumps(detail, indent=2), encoding='utf8')
@@ -142,12 +215,22 @@ def launch(args):
     env['COSMOS_AV_MANIFEST'] = detail['train_manifest']
     env['BASE_CHECKPOINT_PATH'] = detail['init_checkpoint']
     env['WAN_VAE_PATH'] = detail['wan_vae']
+    env['COSMOS_AV_ACTION_NORMALIZER'] = detail.get('action_normalizer') or ''
+    env['COSMOS_AV_ACTION_NORMALIZER_SHA256'] = detail.get('action_normalizer_sha256') or ''
     env.setdefault('IMAGINAIRE_OUTPUT_ROOT', str(rd / 'outputs'))
     cmd = [sys.executable, '-m', 'torch.distributed.run', '--standalone', f'--nproc_per_node={detail["gpus"]}',
            '-m', 'cosmos3av.entry', f'--sft-toml={rd / "sft_config.toml"}']
     print(' '.join(shlex.quote(x) for x in cmd))
     print('Manifest:', detail['train_manifest'])
     print('Checkpoint:', detail['init_checkpoint'])
+    if detail.get('time_contract')!='native_measured_exposures_nominal_10fps':
+        raise RuntimeError('Plan lacks expected native timestamp contract; recreate run with updated plan')
+    norm = detail.get('action_normalizer')
+    if norm:
+        h=hashlib.sha256(Path(norm).read_bytes()).hexdigest()
+        if h!=detail.get('action_normalizer_sha256'):
+            raise RuntimeError('Normalizer checksum differs from planned Stage 1/2 run')
+    print('Action normalizer:', norm or 'none/raw')
     if not args.execute:
         print('[DRY RUN] Pass --execute to launch GPU training. This recipe is EXPERIMENTAL.')
         return
@@ -202,6 +285,10 @@ def main(argv=None):
     q.add_argument('--stage',choices=['pretrain','posttrain'],required=True)
     q.add_argument('--datasets',nargs='+', choices=['kitti','waymo','av2'])
     q.add_argument('--weights',default='',help='e.g. kitti:1,waymo:1')
+    q.add_argument('--stage1-run',default=None,help='Required for posttrain: freezes the Stage1 normalization contract')
+    q.add_argument('--allow-external-stage1-checkpoint',action='store_true')
+    q.add_argument('--action-normalizer',default='', help='Stage-1 train-only XYZ maxabs stats JSON. Reuse SAME file for stage2. Default raw/none.')
+    q.add_argument('--ack-custom-action-normalizer', action='store_true', help='I understand custom statistics may differ from pretrained Cosmos3-Edge normalizer')
     q.add_argument('--init-checkpoint',required=True,help='DCP checkpoint: Cosmos3-Edge for stage1, stage1 saved DCP for stage2')
     q.add_argument('--wan-vae',required=True)
     q.add_argument('--outdir',required=True)
