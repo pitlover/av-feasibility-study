@@ -36,11 +36,18 @@ SCHEMA = {
     "export.step": ("STEP", int, 0, "STEP"),  # 0 means use train.max_iters
     "eval.clips_per_dataset": ("EVAL_CLIPS", int, 20, "EVAL_CLIPS"),
     "eval.infer_gpus": ("INFER_GPUS", int, 1, "INFER_GPUS"),
+    "eval.mode": ("EVAL_MODE", str, "full", "EVAL_MODE"),
+    "eval.eval_dir": ("EVAL_DIR_OVERRIDE", str, "", "EVAL_DIR_OVERRIDE"),
+    "eval.pred_dir": ("PRED_DIR_OVERRIDE", str, "", "PRED_DIR_OVERRIDE"),
     "eval.ground_height_m": ("GROUND_HEIGHT_M", float, 1.7, "GROUND_HEIGHT_M"),
     "eval.horizon_steps": ("HORIZON_STEPS", int, 60, "HORIZON_STEPS"),
     "eval.fps": ("RENDER_FPS", float, 10.0, "RENDER_FPS"),
     "eval.layout": ("RENDER_LAYOUT", str, "both", "RENDER_LAYOUT"),
+    "eval.render_enabled": ("RENDER_ENABLED", bool, True, "RENDER_ENABLED"),
+    "eval.render_max_clips": ("RENDER_MAX_CLIPS", int, 1, "RENDER_MAX_CLIPS"),
+    "eval.render_clip_ids": ("RENDER_CLIP_IDS_JSON", list, [], "RENDER_CLIP_IDS_JSON"),
     "wandb.mode": ("WANDB_MODE", str, "disabled", "WANDB_MODE"),
+    "wandb.project": ("WANDB_PROJECT", str, "cosmos3_av_id", "WANDB_PROJECT"),
     "wandb.enabled": ("WANDB_ENABLED", bool, None, "WANDB_ENABLED"),
 }
 
@@ -71,6 +78,17 @@ def parse_override(text: str) -> tuple[str, object]:
 
 def coerce(key: str, val: object) -> object:
     typ = SCHEMA[key][1]
+    if typ is list:
+        if isinstance(val, str):
+            try:
+                val = json.loads(val)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{key} expects a TOML array of clip IDs") from exc
+        if not isinstance(val, list) or any(not isinstance(x, str) or not x.strip() for x in val):
+            raise ValueError(f"{key} expects an array of nonempty string clip IDs")
+        if len(set(val)) != len(val):
+            raise ValueError(f"{key} contains duplicate clip IDs")
+        return val
     if typ is bool:
         if type(val) is not bool:
             if isinstance(val, str) and val.lower() in ("true", "false"):
@@ -138,7 +156,7 @@ def read_config(path: str | None, overrides: list[str]) -> dict[str, object]:
         values["wandb.mode"] = "online"
 
     for k in ("train.gpus", "train.max_iters", "train.save_every", "data.epoch_clips",
-              "eval.clips_per_dataset", "eval.infer_gpus", "eval.horizon_steps"):
+              "eval.clips_per_dataset", "eval.infer_gpus", "eval.horizon_steps", "eval.render_max_clips"):
         if values[k] <= 0:
             raise ValueError(f"{k} must be positive")
     if values["train.max_iters"] % values["train.save_every"]:
@@ -154,10 +172,14 @@ def read_config(path: str | None, overrides: list[str]) -> dict[str, object]:
         values["export.step"] = values["train.max_iters"]
     if values["eval.horizon_steps"] > 60:
         raise ValueError("eval.horizon_steps must be 1..60")
+    if values["eval.mode"] not in {"score", "render", "both", "full"}:
+        raise ValueError("eval.mode must be score/render/both/full")
     if values["eval.layout"] not in {"both", "bev", "projected"}:
         raise ValueError("eval.layout must be one of both/bev/projected")
     if values["eval.fps"] <= 0:
         raise ValueError("eval.fps must be positive")
+    if not values["wandb.project"].strip():
+        raise ValueError("wandb.project must not be blank")
     if not re.fullmatch(r"[A-Za-z0-9_-]+", values["job.run_tag"]):
         raise ValueError("job.run_tag must use only letters, digits, _ and -")
     if not re.fullmatch(r"[A-Za-z0-9_-]+", values["job.eval_tag"]):
@@ -186,6 +208,8 @@ def main(argv=None):
                 value = ""
             elif isinstance(value, bool):
                 value = "true" if value else "false"
+            elif isinstance(value, list):
+                value = json.dumps(value, ensure_ascii=False)
             sys.stdout.buffer.write(env_name.encode() + b"\0" + str(value).encode() + b"\0")
     return 0
 

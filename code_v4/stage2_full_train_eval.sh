@@ -45,7 +45,7 @@ done < "$CFG_OUT"
 rm -f "$CFG_OUT"
 
 BASE="$(cd "$BASE" && pwd)"
-for var in FRAMEWORK PROCESSED STAGE1_RUN STAGE1_CKPT WAN_VAE; do
+for var in FRAMEWORK PROCESSED STAGE1_RUN STAGE1_CKPT WAN_VAE EVAL_DIR_OVERRIDE PRED_DIR_OVERRIDE; do
   val="${!var}"
   if [[ -n "$val" && "$val" != /* ]]; then
     printf -v "$var" '%s' "$BASE/$val"
@@ -66,6 +66,10 @@ S2_CFG="$S2_OUTPUT/config.yaml"
 MODEL="$BASE/exports/${RUN_TAG}_iter_${STEP}"
 EVAL="$BASE/evaluation/stage2_${RUN_TAG}/av2_${EVAL_TAG}"
 PRED="$BASE/evaluation/pred_${RUN_TAG}_iter_${STEP}_${EVAL_TAG}"
+# Allow score/render to read predictions created by a different evaluation/infer run.
+# In particular this supports manually generated *_retry1 prediction folders.
+[[ -z "${EVAL_DIR_OVERRIDE:-}" ]] || EVAL="$EVAL_DIR_OVERRIDE"
+[[ -z "${PRED_DIR_OVERRIDE:-}" ]] || PRED="$PRED_DIR_OVERRIDE"
 export PYTHONPATH="$BASE:$FRAMEWORK${PYTHONPATH:+:$PYTHONPATH}"
 
 fail(){ echo "[ERROR] $*" >&2; exit 1; }
@@ -95,21 +99,33 @@ print('[STAGE1 CHECK] source checkpoint:', ckpt)
 PY
 }
 
-validate_stage1
-need_file "$PROCESSED/index.jsonl"
-need_file "$FRAMEWORK/cosmos_framework/scripts/train.py"
-if [[ -z "$WAN_VAE" ]]; then
-  WAN_VAE="$(python - "$STAGE1_RUN/run.json" <<'PY'
+# Read-only score/render must work even if the original Stage1 run has moved.
+# Planning/training/exporting Stage2 still strictly requires the real Stage1 DCP.
+case "$MODE" in
+  plan|train|export|all)
+    validate_stage1
+    need_file "$FRAMEWORK/cosmos_framework/scripts/train.py"
+    if [[ -z "$WAN_VAE" ]]; then
+      WAN_VAE="$(python - "$STAGE1_RUN/run.json" <<'PY'
 import json,sys
 print(json.load(open(sys.argv[1]))['wan_vae'])
 PY
 )"
-fi
-need_file "$WAN_VAE"
+    fi
+    need_file "$WAN_VAE"
+    ;;
+  infer) need_file "$FRAMEWORK/cosmos_framework/scripts/train.py" ;;
+  evaluate) [[ "$EVAL_MODE" != full ]] || need_file "$FRAMEWORK/cosmos_framework/scripts/train.py" ;;
+esac
+case "$MODE" in
+  plan|train|inspect|prepare|oracle|all) need_file "$PROCESSED/index.jsonl" ;;
+  evaluate) [[ "$EVAL_MODE" != full ]] || need_file "$PROCESSED/index.jsonl" ;;
+esac
 
 echo "[CONFIG] mode=$MODE run=$RUN_TAG stage1_run=$STAGE1_RUN"
 echo "[CONFIG] stage1_ckpt=$STAGE1_CKPT"
 echo "[CONFIG] Stage2=$S2, max_iters=$MAX_ITERS, wandb=$WANDB_MODE"
+echo "[CONFIG] eval.mode=$EVAL_MODE EVAL=$EVAL PRED=$PRED"
 
 audit_plan(){
   local plan="$S2/resolved_stage2_config.json"
@@ -258,12 +274,36 @@ infer(){
   printf '%s\n' "$MODEL" > "${PRED}.source_export.txt"
 }
 
-score(){
+# Validation is read-only. Do not silently score incomplete evaluations.
+verify_predictions(){
   need_file "$EVAL/selection.jsonl"
-  [[ -d "$PRED" ]] || fail "Missing predictions: $PRED"
+  [[ -d "$PRED" ]] || fail "Missing predictions directory: $PRED (set eval.pred_dir in TOML)"
+  python - "$EVAL/selection.jsonl" "$PRED" <<'PY_PRED_CHECK'
+import sys
+from pathlib import Path
+from cosmos3eval.data import read_jsonl
+from cosmos3eval.predictions import load_pred
+sel, root = Path(sys.argv[1]), Path(sys.argv[2])
+rows = read_jsonl(sel)
+missing = []
+for row in rows:
+    try:
+        load_pred(root, row['clip_id'])
+    except (FileNotFoundError, ValueError, KeyError, TypeError) as exc:
+        missing.append((row['clip_id'], str(exc)))
+print(f'[PRED CHECK] selected={len(rows)} available={len(rows)-len(missing)} missing={len(missing)}')
+if missing:
+    for cid, why in missing[:10]:
+        print(f'[PRED MISSING] {cid}: {why}', file=sys.stderr)
+    raise SystemExit('[ERROR] Missing or unreadable predictions. Set eval.pred_dir to a completed prediction directory or run infer for a new eval tag.')
+PY_PRED_CHECK
+}
+
+score(){
+  verify_predictions
   python -m cosmos3eval.cli score --eval-dir "$EVAL" --pred-dir "$PRED" \
     --model "${RUN_TAG}_iter_${STEP}" \
-    --wandb-mode "$WANDB_MODE" --wandb-project cosmos3_av_id \
+    --wandb-mode "$WANDB_MODE" --wandb-project "$WANDB_PROJECT" \
     --wandb-group posttrain --wandb-name "eval_${RUN_TAG}_iter_${STEP}_${EVAL_TAG}"
   python - "$PRED/metrics/summary.json" <<'PY'
 import json,sys
@@ -275,21 +315,39 @@ PY
 }
 
 render(){
-  need_file "$EVAL/selection.jsonl"
-  [[ -d "$PRED" ]] || fail "Missing predictions: $PRED"
-  local cid
-  cid="$(python - "$EVAL/selection.jsonl" <<'PY'
-import json,sys
-for line in open(sys.argv[1]):
-    if line.strip():
-        print(json.loads(line)['clip_id']);break
-PY
-)"
-  [[ -n "$cid" ]] || fail 'No AV2 val clip for visualization'
-  python -m cosmos3eval.cli render --eval-dir "$EVAL" --pred-dir "$PRED" \
-    --clip-id "$cid" --layout "$RENDER_LAYOUT" --ground-height-m "$GROUND_HEIGHT_M" \
-    --horizon-steps "$HORIZON_STEPS" --fps "$RENDER_FPS" --out-dir "$PRED/qualitative"
-  echo "[RENDER OK] $PRED/qualitative"
+  # Only render an evaluation when ALL selected clips have predictions.
+  # A partial run should never silently be treated as complete.
+  verify_predictions
+  local selected ds cid
+  selected="$(python "$SCRIPT_DIR/scripts/choose_render_clips.py" \
+    --selection "$EVAL/selection.jsonl" --datasets av2 \
+    --max-per-dataset "$RENDER_MAX_CLIPS" --clip-ids-json "$RENDER_CLIP_IDS_JSON")" \
+    || fail "Could not select Stage2 clips for rendering"
+  while IFS=$'\t' read -r ds cid; do
+    [[ -n "$cid" ]] || continue
+    echo "[RENDER] $ds clip=$cid (ground_height_m=$GROUND_HEIGHT_M approximate)"
+    python -m cosmos3eval.cli render --eval-dir "$EVAL" --pred-dir "$PRED" \
+      --clip-id "$cid" --layout "$RENDER_LAYOUT" \
+      --ground-height-m "$GROUND_HEIGHT_M" --horizon-steps "$HORIZON_STEPS" \
+      --fps "$RENDER_FPS" --out-dir "$PRED/qualitative/$ds"
+  done <<< "$selected"
+  echo "[RENDER OK] $PRED/qualitative/"
+}
+maybe_render(){
+  if [[ "$RENDER_ENABLED" == true ]]; then render
+  else echo '[RENDER SKIPPED] eval.render_enabled=false (run the render command to render separately)'; fi
+}
+
+# TOML controls the action for the *evaluate* command.
+# Existing-prediction modes never invoke inference or change checkpoints.
+evaluate_from_toml(){
+  case "$EVAL_MODE" in
+    score) score ;;
+    render) render ;;
+    both) score; render ;;
+    full) prepare_eval; oracle; infer; score; maybe_render ;;
+    *) fail "Unsupported eval.mode: $EVAL_MODE" ;;
+  esac
 }
 
 case "$MODE" in
@@ -302,7 +360,7 @@ case "$MODE" in
   infer) infer;;
   score) score;;
   render) render;;
-  evaluate) prepare_eval; oracle; infer; score; render;;
-  all) inspect; plan; train; export_model; prepare_eval; oracle; infer; score; render;;
+  evaluate) evaluate_from_toml;;
+  all) [[ "$EVAL_MODE" == full ]] || fail 'all requires eval.mode="full"'; inspect; plan; train; export_model; evaluate_from_toml;;
   *) fail "Unexpected command: $MODE";;
 esac

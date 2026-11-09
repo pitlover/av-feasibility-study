@@ -36,7 +36,7 @@ while (( $# )); do
     *) echo "[ERROR] Unknown argument: $1" >&2; exit 2;;
   esac
 done
-MODE="${MODE:-inspect}"
+MODE="${MODE:-config}"
 if [[ -n "$CONFIG_PATH" ]]; then
   CONFIG_PATH="$(python -c 'from pathlib import Path;import sys;print(Path(sys.argv[1]).expanduser().resolve())' "$CONFIG_PATH")"
 fi
@@ -57,7 +57,7 @@ BASE="$(cd "$BASE" && pwd)"
 FRAMEWORK="${FRAMEWORK:-$BASE/cosmos-framework}"
 PROCESSED="${PROCESSED:-$BASE/processed_virtual_native_v2}"
 TEMPLATE_RUN="${TEMPLATE_RUN:-$BASE/runs_virtual/stage1_joint_300}"
-for pathvar in FRAMEWORK PROCESSED TEMPLATE_RUN EDGE_DCP WAN_VAE; do
+for pathvar in FRAMEWORK PROCESSED TEMPLATE_RUN EDGE_DCP WAN_VAE EVAL_DIR_OVERRIDE PRED_DIR_OVERRIDE; do
   pth="${!pathvar}"
   if [[ -n "$pth" && "$pth" != /* ]]; then
     printf -v "$pathvar" '%s' "$BASE/$pth"
@@ -79,6 +79,9 @@ S1_CFG="$S1_OUTPUT/config.yaml"
 MODEL="$BASE/exports/${RUN_TAG}_iter_${STEP}"
 EVAL="$BASE/evaluation/stage1_${RUN_TAG}/kitti_waymo_${EVAL_TAG}"
 PRED="$BASE/evaluation/pred_${RUN_TAG}_iter_${STEP}_${EVAL_TAG}"
+# Optional explicit evaluation/prediction paths (existing results, e.g. *_retry1).
+[[ -z "${EVAL_DIR_OVERRIDE:-}" ]] || EVAL="$EVAL_DIR_OVERRIDE"
+[[ -z "${PRED_DIR_OVERRIDE:-}" ]] || PRED="$PRED_DIR_OVERRIDE"
 export PYTHONPATH="$BASE:$FRAMEWORK${PYTHONPATH:+:$PYTHONPATH}"
 
 fail(){ printf '[ERROR] %s\n' "$*" >&2; exit 1; }
@@ -91,18 +94,30 @@ done
 (( GPUS>=1 && MAX_ITERS>=1 && SAVE_EVERY>=1 && EPOCH_CLIPS>=1 && EVAL_CLIPS>=1 && STEP>=1 && INFER_GPUS>=1 )) || fail 'Invalid nonpositive integer option'
 (( MAX_ITERS % SAVE_EVERY == 0 )) || fail 'MAX_ITERS must be divisible by SAVE_EVERY for the requested final checkpoint check'
 
-need_file "$PROCESSED/index.jsonl"
-if [[ -z "$EDGE_DCP" || -z "$WAN_VAE" ]]; then
-  need_file "$TEMPLATE_RUN/run.json"
-fi
-need_file "$FRAMEWORK/cosmos_framework/scripts/train.py"
-EDGE_DCP="${EDGE_DCP:-$(python -c 'import json,sys;print(json.load(open(sys.argv[1]))["init_checkpoint"])' "$TEMPLATE_RUN/run.json")}"
-WAN_VAE="${WAN_VAE:-$(python -c 'import json,sys;print(json.load(open(sys.argv[1]))["wan_vae"])' "$TEMPLATE_RUN/run.json")}"
-[[ -d "$EDGE_DCP" ]] || fail "Cosmos3-Edge pretrained checkpoint missing: $EDGE_DCP"
-need_file "$WAN_VAE"
+# Read-only evaluation must not depend on a historical Stage1 checkpoint or VAE.
+case "$MODE" in
+  inspect|plan|train|export|prepare|oracle|infer|all)
+    need_file "$PROCESSED/index.jsonl" ;;
+  evaluate)
+    [[ "$EVAL_MODE" != full ]] || need_file "$PROCESSED/index.jsonl" ;;
+esac
+case "$MODE" in
+  plan|train|export|all)
+    if [[ -z "$EDGE_DCP" || -z "$WAN_VAE" ]]; then
+      need_file "$TEMPLATE_RUN/run.json"
+    fi
+    EDGE_DCP="${EDGE_DCP:-$(python -c 'import json,sys;print(json.load(open(sys.argv[1]))["init_checkpoint"])' "$TEMPLATE_RUN/run.json")}"
+    WAN_VAE="${WAN_VAE:-$(python -c 'import json,sys;print(json.load(open(sys.argv[1]))["wan_vae"])' "$TEMPLATE_RUN/run.json")}"
+    [[ -d "$EDGE_DCP" ]] || fail "Cosmos3-Edge pretrained checkpoint missing: $EDGE_DCP"
+    need_file "$WAN_VAE"
+    need_file "$FRAMEWORK/cosmos_framework/scripts/train.py"
+    ;;
+  infer) need_file "$FRAMEWORK/cosmos_framework/scripts/train.py" ;;
+  evaluate) [[ "$EVAL_MODE" != full ]] || need_file "$FRAMEWORK/cosmos_framework/scripts/train.py" ;;
+esac
 
 printf '[CONFIG] mode=%s run=%s iter=%s export_step=%s gpus=%s\n' "$MODE" "$RUN_TAG" "$MAX_ITERS" "$STEP" "$GPUS"
-printf '[CONFIG] processed=%s eval=%s\n' "$PROCESSED" "$EVAL"
+printf '[CONFIG] processed=%s eval=%s pred=%s eval_mode=%s\n' "$PROCESSED" "$EVAL" "$PRED" "$EVAL_MODE"
 printf '[CONFIG] source_toml=%s weights=kitti:%s,waymo:%s wandb=%s\n' \
   "${CONFIG_PATH:-none}" "$KITTI_WEIGHT" "$WAYMO_WEIGHT" "$WANDB_MODE"
 
@@ -290,21 +305,38 @@ infer(){
   echo "[INFER OK] $PRED"
 }
 
-score(){
+# Verify the complete evaluation selection before scoring or rendering. A partially
+# created predictions directory must not silently appear to be a complete run.
+verify_predictions(){
   need_file "$EVAL/selection.jsonl"
-  [[ -d "$PRED" ]] || fail "Missing predictions: $PRED"
-  # With no explicit TOML/env/CLI W&B setting, inherit the saved plan mode.
+  [[ -d "$PRED" ]] || fail "Missing predictions directory: $PRED (set eval.pred_dir in TOML)"
+  python - "$EVAL/selection.jsonl" "$PRED" <<'PY_PRED_CHECK'
+import sys
+from pathlib import Path
+from cosmos3eval.data import read_jsonl
+from cosmos3eval.predictions import load_pred
+sel, root = Path(sys.argv[1]), Path(sys.argv[2])
+rows = read_jsonl(sel)
+missing = []
+for row in rows:
+    try:
+        load_pred(root, row['clip_id'])
+    except (FileNotFoundError, ValueError, KeyError, TypeError) as exc:
+        missing.append((row['clip_id'], str(exc)))
+print(f'[PRED CHECK] selected={len(rows)} available={len(rows)-len(missing)} missing={len(missing)}')
+if missing:
+    for cid,why in missing[:10]:
+        print(f'[PRED MISSING] {cid}: {why}', file=sys.stderr)
+    raise SystemExit('[ERROR] Missing or unreadable predictions; run infer to a NEW eval tag or set eval.pred_dir')
+PY_PRED_CHECK
+}
+
+score(){
+  verify_predictions
   local mode="$WANDB_MODE"
-  if [[ -z "$CONFIG_PATH" && -z "$WANDB_ENV_GIVEN" && "$WANDB_OVERRIDE_GIVEN" == 0 ]]; then
-    mode="$(python - "$S1/run.json" <<'PYMODE'
-import json,sys
-print(json.load(open(sys.argv[1])).get('wandb_mode','disabled'))
-PYMODE
-)"
-  fi
   python -m cosmos3eval.cli score --eval-dir "$EVAL" --pred-dir "$PRED" \
     --model "${RUN_TAG}_iter_${STEP}" \
-    --wandb-mode "$mode" --wandb-project cosmos3_av_id --wandb-group pretrain \
+    --wandb-mode "$mode" --wandb-project "$WANDB_PROJECT" --wandb-group pretrain \
     --wandb-name "eval_${RUN_TAG}_iter_${STEP}_${EVAL_TAG}"
   python - "$PRED/metrics/summary.json" <<'PY'
 import json,sys
@@ -320,23 +352,35 @@ PY
 }
 
 render(){
-  need_file "$EVAL/selection.jsonl"
-  [[ -d "$PRED" ]] || fail "Missing predictions: $PRED"
-  for ds in kitti waymo; do
-    cid="$(python - "$EVAL/selection.jsonl" "$ds" <<'PY'
-import json,sys
-for line in open(sys.argv[1]):
-    row=json.loads(line)
-    if row['dataset']==sys.argv[2]:print(row['clip_id']);break
-PY
-)"
-    [[ -n "$cid" ]] || fail "No selected $ds clip"
-    echo "[RENDER] $ds clip=$cid, ground_height_m=$GROUND_HEIGHT_M (approximate)"
+  verify_predictions
+  local selected ds cid
+  selected="$(python "$SCRIPT_DIR/scripts/choose_render_clips.py" \
+    --selection "$EVAL/selection.jsonl" --datasets kitti waymo \
+    --max-per-dataset "$RENDER_MAX_CLIPS" --clip-ids-json "$RENDER_CLIP_IDS_JSON")" \
+    || fail "Could not select Stage1 clips for rendering"
+  while IFS=$'\t' read -r ds cid; do
+    [[ -n "$cid" ]] || continue
+    echo "[RENDER] $ds clip=$cid (ground_height_m=$GROUND_HEIGHT_M approximate)"
     python -m cosmos3eval.cli render --eval-dir "$EVAL" --pred-dir "$PRED" \
       --clip-id "$cid" --layout "$RENDER_LAYOUT" --horizon-steps "$HORIZON_STEPS" \
-      --ground-height-m "$GROUND_HEIGHT_M" --fps "$RENDER_FPS" --out-dir "$PRED/qualitative/$ds"
-  done
-  echo "[RENDER OK] $PRED/qualitative/{kitti,waymo}/"
+      --ground-height-m "$GROUND_HEIGHT_M" --fps "$RENDER_FPS" \
+      --out-dir "$PRED/qualitative/$ds"
+  done <<< "$selected"
+  echo "[RENDER OK] $PRED/qualitative/"
+}
+maybe_render(){
+  if [[ "$RENDER_ENABLED" == true ]]; then render
+  else echo '[RENDER SKIPPED] eval.render_enabled=false (run the render command to render separately)'; fi
+}
+
+evaluate_from_toml(){
+  case "$EVAL_MODE" in
+    score) score ;;
+    render) render ;;
+    both) score; render ;;
+    full) prepare_eval; oracle; infer; score; maybe_render ;;
+    *) fail "Unsupported eval.mode: $EVAL_MODE" ;;
+  esac
 }
 
 case "$MODE" in
@@ -349,7 +393,7 @@ case "$MODE" in
   infer) infer;;
   score) score;;
   render) render;;
-  evaluate) prepare_eval; oracle; infer; score; render;;
-  all) inspect; plan; train; export_model; prepare_eval; oracle; infer; score; render;;
+  evaluate) evaluate_from_toml;;
+  all) [[ "$EVAL_MODE" == full ]] || fail 'all requires eval.mode="full"'; inspect; plan; train; export_model; evaluate_from_toml;;
   *) fail 'Usage: bash stage1_full_train_eval.sh [--toml FILE] inspect|config|plan|train|export|prepare|oracle|infer|score|render|evaluate|all [section.key=value]';;
 esac

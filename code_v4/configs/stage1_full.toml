@@ -1,29 +1,28 @@
-# Stage1: Cosmos3-Edge -> KITTI+Waymo (raw camera-relative 9D action)
-# Usage: bash stage1_full_train_eval.sh --toml configs/stage1_full.toml plan
-#        bash stage1_full_train_eval.sh --toml configs/stage1_full.toml train
-
+# Stage1: Cosmos3-Edge -> KITTI + Waymo (camera-relative raw 9D)
+# Commands: bash stage1_full_train_eval.sh --toml configs/stage1_full.toml plan|train|export|evaluate
 [job]
-run_tag  = "s1_toml_v1"          # New name: never overwrite s1_full_raw_v1
+run_tag = "s1_pipeline_v1"               # New unique run; do not overwrite past training
 eval_tag = "val_seed42_v1"
 
 [paths]
-# Relative paths resolve against the current project base (pwd), unless base is set.
+base = "."
 processed = "processed_virtual_native_v2"
 framework = "cosmos-framework"
-template_run = "runs_virtual/stage1_joint_300"
-# edge_dcp = "/path/to/Cosmos3-Edge"      # default: template run.json
-# wan_vae  = "/path/to/Wan2.2_VAE.pth"   # default: template run.json
+# Explicit paths avoid depending on a historical template run.json.
+edge_dcp = "/mnt/ufs/users/jiyoung-kim/project/backend/cosmos/cookbooks/cosmos3/generator/action/finetune/checkpoints/Cosmos3-Edge"
+wan_vae = "/mnt/ufs/users/jiyoung-kim/project/backend/cosmos/cookbooks/cosmos3/generator/action/finetune/checkpoints/wan22_vae/Wan2.2_VAE.pth"
 
 [data]
 epoch_clips = 12000
 seed = 42
+
 [data.weights]
 kitti = 1.0
 waymo = 1.0
 
 [train]
-gpus       = 4
-max_iters  = 3000
+gpus = 4
+max_iters = 3000
 save_every = 500
 
 [optimizer]
@@ -31,15 +30,23 @@ lr = 1e-5
 
 [wandb]
 enabled = false
-mode = "disabled"   # enabled=true: online | offline; false: disabled only
+mode = "disabled"                     # disabled | offline | online
+project = "cosmos3_av_id"
 
 [export]
-step = 0            # follow train.max_iters automatically
+step = 0                              # 0 -> train.max_iters
 
 [eval]
+mode = "full"                         # full (infer+score+render) | score | render | both
 clips_per_dataset = 20
 infer_gpus = 1
-ground_height_m = 1.7
+# Leave empty to use the run's default evaluation and prediction folders.
+eval_dir = ""
+pred_dir = ""
+render_enabled = true                # used only when eval.mode="full"
+render_max_clips = 3                 # per dataset (KITTI 3 + Waymo 3)
+render_clip_ids = []                 # or ["kitti_10_000000", ...]
+ground_height_m = 1.7                # visual-only approximation, NOT used in metrics
 horizon_steps = 60
 fps = 10
 layout = "both"

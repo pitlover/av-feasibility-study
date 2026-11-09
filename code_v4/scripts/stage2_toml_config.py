@@ -34,13 +34,21 @@ SCHEMA = {
     'optimizer.lr': ('LR', float, 1e-5),
     'wandb.enabled': ('WANDB_ENABLED', bool, False),
     'wandb.mode': ('WANDB_MODE', str, 'disabled'),
+    'wandb.project': ('WANDB_PROJECT', str, 'cosmos3_av_id'),
     'export.step': ('STEP', int, 0),
     'eval.clips_per_dataset': ('EVAL_CLIPS', int, 20),
     'eval.infer_gpus': ('INFER_GPUS', int, 1),
+    # 'full' runs fresh infer; other modes reuse existing prediction files.
+    'eval.mode': ('EVAL_MODE', str, 'full'),
+    'eval.eval_dir': ('EVAL_DIR_OVERRIDE', str, ''),
+    'eval.pred_dir': ('PRED_DIR_OVERRIDE', str, ''),
     'eval.ground_height_m': ('GROUND_HEIGHT_M', float, 1.7),
     'eval.horizon_steps': ('HORIZON_STEPS', int, 60),
     'eval.fps': ('RENDER_FPS', float, 10.0),
     'eval.layout': ('RENDER_LAYOUT', str, 'both'),
+    'eval.render_enabled': ('RENDER_ENABLED', bool, True),
+    'eval.render_max_clips': ('RENDER_MAX_CLIPS', int, 1),
+    'eval.render_clip_ids': ('RENDER_CLIP_IDS_JSON', list, []),
 }
 
 
@@ -70,6 +78,17 @@ def read_override(s: str):
 
 def coerce(k, raw):
     typ = SCHEMA[k][1]
+    if typ == list:
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f'{k} must be a TOML array of clip IDs') from exc
+        if not isinstance(raw, list) or any(not isinstance(v, str) or not v.strip() for v in raw):
+            raise ValueError(f'{k} must be an array of nonempty string clip IDs')
+        if len(set(raw)) != len(raw):
+            raise ValueError(f'{k} contains duplicate clip IDs')
+        return raw
     if typ == bool:
         if type(raw) == bool:
             return raw
@@ -120,7 +139,7 @@ def resolve(path: str | None, overrides: list[str]) -> dict:
     if enabled and mode == 'disabled':
         raise ValueError('wandb.enabled=true conflicts with wandb.mode=disabled')
     for key in ('train.max_iters','train.save_every','train.gpus', 'data.epoch_clips',
-                'eval.clips_per_dataset','eval.infer_gpus','eval.horizon_steps'):
+                'eval.clips_per_dataset','eval.infer_gpus','eval.horizon_steps', 'eval.render_max_clips'):
         if values[key] < 1:
             raise ValueError(f'{key} must be positive')
     if values['train.max_iters'] % values['train.save_every']:
@@ -137,6 +156,10 @@ def resolve(path: str | None, overrides: list[str]) -> dict:
         raise ValueError('eval.horizon_steps must be 1..60')
     if values['eval.layout'] not in {'both','bev','projected'}:
         raise ValueError('eval.layout must be both/bev/projected')
+    if values['eval.mode'] not in {'full', 'score', 'render', 'both'}:
+        raise ValueError('eval.mode must be one of full/score/render/both')
+    if not values['wandb.project'].strip():
+        raise ValueError('wandb.project must not be blank')
     for key in ('job.run_tag','job.eval_tag'):
         if not re.fullmatch(r'[A-Za-z0-9_-]+', values[key]):
             raise ValueError(f'{key} allows only letters/numbers/_/-')
@@ -161,6 +184,8 @@ def main():
             v = data[key]
             if isinstance(v, bool):
                 v = 'true' if v else 'false'
+            elif isinstance(v, list):
+                v = json.dumps(v, ensure_ascii=False)
             sys.stdout.buffer.write(env.encode() + b'\0' + str(v).encode() + b'\0')
     return 0
 
