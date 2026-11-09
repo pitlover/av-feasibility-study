@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -32,7 +33,9 @@ def _weights(value: str, selected: list[str]):
     return res
 
 
-def _toml(stage: str, name: str, iters: int, lr: float, save_every: int, gpus: int) -> str:
+def _toml(stage: str, name: str, iters: int, lr: float, save_every: int, gpus: int, wandb_mode: str = "disabled") -> str:
+    if wandb_mode not in ("disabled", "online", "offline"):
+        raise ValueError(f"Unknown W&B mode: {wandb_mode}")
     # The official Edge action-SFT combination is unvalidated; start with few steps.
     return f'''# EXPERIMENTAL AV inverse dynamics adaptation of official Cosmos3 action SFT.
 [job]
@@ -41,7 +44,7 @@ experiment = "action_inverse_dynamics_av_edge"
 project = "cosmos3_av_id"
 group = "{stage}"
 name = "{name}"
-wandb_mode = "disabled"
+wandb_mode = "{wandb_mode}"
 
 [model]
 precision = "bfloat16"
@@ -157,7 +160,7 @@ def plan(args):
     write_jsonl(manifest, samples)
     write_jsonl(run_dir / 'val.jsonl', val_rows)
     (run_dir / 'sft_config.toml').write_text(_toml(args.stage, run_dir.name, args.max_iters,
-                args.lr, args.save_every, args.gpus), encoding='utf8')
+                args.lr, args.save_every, args.gpus, args.wandb_mode), encoding='utf8')
     detail = dict(stage=args.stage, datasets=selected, weights=weights,
         init_checkpoint=str(ckpt), wan_vae=str(vae), processed_root=str(root),
         train_manifest=str(manifest), val_manifest=str(run_dir/'val.jsonl'),
@@ -165,6 +168,8 @@ def plan(args):
         action_frame=action_frame, stage1_run=str(Path(args.stage1_run).expanduser().resolve()) if args.stage1_run else None,
         action_normalizer=str(norm_path) if norm_path else None, action_normalizer_sha256=norm_sha,
         max_dt_error_s=args.max_dt_error_s,
+        wandb_mode=args.wandb_mode, wandb_project='cosmos3_av_id',
+        wandb_group=args.stage, wandb_name=run_dir.name,
         caveat='EXPERIMENTAL: AV ID is not an NVIDIA validated SFT recipe; checkpoint action norm and head compatibility must be tested.',
     )
     (run_dir / 'run.json').write_text(json.dumps(detail, indent=2), encoding='utf8')
@@ -186,6 +191,26 @@ def launch(args):
             'Recreate this run with `plan` using a NEW --outdir, or inspect the '
             'existing TOML before retrying.'
         )
+    # Do not modify the training config or silently enable W&B for existing runs.
+    planned_mode = re.search(r'(?m)^\s*wandb_mode\s*=\s*"(disabled|online|offline)"\s*$', toml_text)
+    if not planned_mode:
+        raise ValueError(f'Missing/invalid [job] wandb_mode in {rd / "sft_config.toml"}')
+    mode = args.wandb_mode if args.wandb_mode is not None else planned_mode.group(1)
+    if mode not in ('disabled', 'online', 'offline'):
+        raise ValueError(f'Invalid W&B mode {mode}')
+    selected_toml = rd / 'sft_config.toml'
+    if mode != planned_mode.group(1) and args.execute:
+        # Runtime override in a separate TOML, preserving the original run plan.
+        selected_toml = rd / f'sft_config.wandb_{mode}.toml'
+        override_text = (toml_text[:planned_mode.start(1)] + mode +
+                         toml_text[planned_mode.end(1):])
+        selected_toml.write_text(override_text, encoding='utf8')
+    if mode != 'disabled' and args.execute:
+        try:
+            import wandb  # noqa: F401 - Fail before distributed GPU launch.
+        except ImportError as exc:
+            raise RuntimeError('W&B enabled, but wandb is not installed. Run pip install wandb') from exc
+    print(f'[WANDB] mode={mode} (planned={planned_mode.group(1)})')
     repo = Path(__file__).resolve().parent.parent
     env = os.environ.copy()
     env['PYTHONPATH'] = os.pathsep.join([str(repo), str(framework), env.get('PYTHONPATH', '')])
@@ -197,14 +222,24 @@ def launch(args):
         load_normalizer(normalizer_path, expected_sha256=detail.get('action_normalizer_sha256'))
     env['COSMOS_AV_ACTION_NORMALIZER'] = normalizer_path or ''
     env.setdefault('IMAGINAIRE_OUTPUT_ROOT', str(rd / 'outputs'))
+    if mode != 'disabled':
+        # Keep offline files with the training run, not in cosmos-framework's CWD.
+        wandb_dir = rd / 'wandb'
+        if args.execute:
+            wandb_dir.mkdir(parents=True, exist_ok=True)
+        env.setdefault('WANDB_DIR', str(wandb_dir))
     cmd = [sys.executable, '-m', 'torch.distributed.run', '--standalone', f'--nproc_per_node={detail["gpus"]}',
-           '-m', 'cosmos3av.entry', f'--sft-toml={rd / "sft_config.toml"}']
+           '-m', 'cosmos3av.entry', f'--sft-toml={selected_toml}']
     print(' '.join(shlex.quote(x) for x in cmd))
     print('Manifest:', detail['train_manifest'])
     print('Checkpoint:', detail['init_checkpoint'])
     if not args.execute:
         print('[DRY RUN] Pass --execute to launch GPU training. This recipe is EXPERIMENTAL.')
         return
+    (rd / 'wandb_launch.json').write_text(json.dumps({
+        'mode': mode, 'sft_toml': str(selected_toml), 'project': 'cosmos3_av_id',
+        'group': detail['stage'], 'name': rd.name,
+    }, indent=2), encoding='utf8')
     subprocess.run(cmd, cwd=framework, env=env, check=True)
 
 
@@ -256,6 +291,8 @@ def main(argv=None):
     q.add_argument('--stage',choices=['pretrain','posttrain'],required=True)
     q.add_argument('--datasets',nargs='+', choices=['kitti','waymo','av2'])
     q.add_argument('--weights',default='',help='e.g. kitti:1,waymo:1')
+    q.add_argument('--wandb-mode', choices=['disabled','online','offline'], default='disabled',
+                   help='W&B mode for training; disabled by default')
     q.add_argument('--action-normalizer',help='Stage 1 explicit custom camera action normalizer JSON')
     q.add_argument('--stage1-run',help='Stage 2: inherit and verify Stage 1 normalizer contract')
     q.add_argument('--ack-custom-action-normalizer',action='store_true',
@@ -278,6 +315,8 @@ def main(argv=None):
     x.add_argument('--run-dir',required=True)
     x.add_argument('--framework-root',required=True)
     x.add_argument('--execute',action='store_true')
+    x.add_argument('--wandb-mode', choices=['disabled','online','offline'], default=None,
+                   help='Optional runtime mode override without modifying sft_config.toml')
     x.set_defaults(func=launch)
     s=sub.add_parser('timing',help='inspect acquisition dt vs nominal 10Hz for any dataset')
     s.add_argument('--processed-root',required=True)

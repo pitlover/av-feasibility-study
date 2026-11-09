@@ -1,0 +1,45 @@
+# Stage1: Cosmos3-Edge -> KITTI+Waymo (raw camera-relative 9D action)
+# Usage: bash stage1_full_train_eval.sh --toml configs/stage1_full.toml plan
+#        bash stage1_full_train_eval.sh --toml configs/stage1_full.toml train
+
+[job]
+run_tag  = "s1_toml_v1"          # New name: never overwrite s1_full_raw_v1
+eval_tag = "val_seed42_v1"
+
+[paths]
+# Relative paths resolve against the current project base (pwd), unless base is set.
+processed = "processed_virtual_native_v2"
+framework = "cosmos-framework"
+template_run = "runs_virtual/stage1_joint_300"
+# edge_dcp = "/path/to/Cosmos3-Edge"      # default: template run.json
+# wan_vae  = "/path/to/Wan2.2_VAE.pth"   # default: template run.json
+
+[data]
+epoch_clips = 12000
+seed = 42
+[data.weights]
+kitti = 1.0
+waymo = 1.0
+
+[train]
+gpus       = 4
+max_iters  = 3000
+save_every = 500
+
+[optimizer]
+lr = 1e-5
+
+[wandb]
+enabled = false
+mode = "disabled"   # enabled=true: online | offline; false: disabled only
+
+[export]
+step = 0            # follow train.max_iters automatically
+
+[eval]
+clips_per_dataset = 20
+infer_gpus = 1
+ground_height_m = 1.7
+horizon_steps = 60
+fps = 10
+layout = "both"

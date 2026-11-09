@@ -24,6 +24,10 @@ SAVE_EVERY="${SAVE_EVERY:-50}"
 EPOCH_CLIPS="${EPOCH_CLIPS:-500}"
 EVAL_CLIPS="${EVAL_CLIPS:-5}"
 SEED="${SEED:-42}"
+# Default disabled for new plans; existing runs can be logged by setting
+# WANDB_MODE=online|offline for evaluation without changing their weights.
+WANDB_MODE="${WANDB_MODE:-}"
+[[ -z "$WANDB_MODE" || "$WANDB_MODE" =~ ^(disabled|online|offline)$ ]] || { echo "Invalid WANDB_MODE" >&2; exit 2; }
 # Include the previously diagnosed AV2 clip in val evaluation when it is a val clip.
 MATCH_CLIP_ID="${MATCH_CLIP_ID:-av2_02678d04-cc9f-3148-9f95-1ba66347dff9_000000}"
 
@@ -67,7 +71,8 @@ stage1(){
     --stage pretrain --datasets kitti waymo --weights kitti:1,waymo:1 \
     --processed-root "$PROCESSED" --init-checkpoint "$EDGE_DCP" --wan-vae "$WAN_VAE" \
     --outdir "$S1" --epoch-clips "$EPOCH_CLIPS" --max-iters "$MAX_ITERS" \
-    --save-every "$SAVE_EVERY" --gpus "$GPUS" --seed "$SEED" --full-preflight
+    --save-every "$SAVE_EVERY" --gpus "$GPUS" --seed "$SEED" \
+    --wandb-mode "${WANDB_MODE:-disabled}" --full-preflight
   echo '[STAGE1] Running dataset/model sample contract check'
   python -m cosmos3av.cli smoke --manifest "$S1/train.jsonl"
   echo '[STAGE1] Training starts'
@@ -86,7 +91,8 @@ stage2(){
     --stage posttrain --datasets av2 --stage1-run "$S1" \
     --processed-root "$PROCESSED" --init-checkpoint "$S1_CKPT" --wan-vae "$WAN_VAE" \
     --outdir "$S2" --epoch-clips "$EPOCH_CLIPS" --max-iters "$MAX_ITERS" \
-    --save-every "$SAVE_EVERY" --gpus "$GPUS" --seed "$SEED" --full-preflight
+    --save-every "$SAVE_EVERY" --gpus "$GPUS" --seed "$SEED" \
+    --wandb-mode "${WANDB_MODE:-disabled}" --full-preflight
   echo '[STAGE2] Running dataset/model sample contract check'
   python -m cosmos3av.cli smoke --manifest "$S2/train.jsonl"
   echo '[STAGE2] Training starts'
@@ -154,11 +160,13 @@ PYCODE
   python -m cosmos3eval.cli infer --eval-dir "$EVAL" --pred-dir "$PRED1" \
     --framework-root "$FRAMEWORK" --checkpoint "$MODEL1" --gpus 1 --execute
   python -m cosmos3eval.cli score --eval-dir "$EVAL" --pred-dir "$PRED1" \
-    --model "$(basename "$S1")"
+    --model "$(basename "$S1")" --wandb-mode "${WANDB_MODE:-disabled}" \
+    --wandb-project cosmos3_av_id --wandb-group pretrain --wandb-name "eval_$(basename "$S1")_${EVAL_TAG}"
   python -m cosmos3eval.cli infer --eval-dir "$EVAL" --pred-dir "$PRED2" \
     --framework-root "$FRAMEWORK" --checkpoint "$MODEL2" --gpus 1 --execute
   python -m cosmos3eval.cli score --eval-dir "$EVAL" --pred-dir "$PRED2" \
-    --model "$(basename "$S2")"
+    --model "$(basename "$S2")" --wandb-mode "${WANDB_MODE:-disabled}" \
+    --wandb-project cosmos3_av_id --wandb-group posttrain --wandb-name "eval_$(basename "$S2")_${EVAL_TAG}"
   python -m cosmos3eval.cli compare --summaries \
     "$PRED1/metrics/summary.json" "$PRED2/metrics/summary.json" \
     --out "$EVAL/stage1_vs_stage2.csv"

@@ -5,23 +5,71 @@
 # Safe defaults: raw actions, separate run names, no overwrite of checkpoints or predictions.
 set -Eeuo pipefail
 
-MODE="${1:-inspect}"
-BASE="${BASE:-$(pwd)}"; BASE="$(cd "$BASE" && pwd)"
+# Usage:
+#   bash stage1_full_train_eval.sh --toml configs/stage1_full.toml plan
+#   bash stage1_full_train_eval.sh train --toml configs/stage1_full.toml
+#   bash stage1_full_train_eval.sh --toml configs/stage1_full.toml train.max_iters=500 plan
+# Priority: dotted CLI assignment > TOML > environment variables > defaults.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_HELPER="$SCRIPT_DIR/scripts/stage1_toml_config.py"
+[[ -f "$CONFIG_HELPER" ]] || { echo "[ERROR] Missing TOML helper: $CONFIG_HELPER" >&2; exit 2; }
+MODE=""
+CONFIG_PATH=""
+OVERRIDES=()
+WANDB_ENV_GIVEN="${WANDB_MODE+x}"
+WANDB_OVERRIDE_GIVEN=0
+while (( $# )); do
+  case "$1" in
+    --toml)
+      (( $# >= 2 )) || { echo '[ERROR] --toml requires a file path' >&2; exit 2; }
+      CONFIG_PATH="$2"; shift 2;;
+    --toml=*) CONFIG_PATH="${1#--toml=}"; shift;;
+    -h|--help)
+      echo 'Usage: bash stage1_full_train_eval.sh [--toml FILE] inspect|config|plan|train|export|prepare|oracle|infer|score|render|evaluate|all [section.key=value ...]'
+      exit 0;;
+    inspect|config|plan|train|export|prepare|oracle|infer|score|render|evaluate|all)
+      [[ -z "$MODE" ]] || { echo "[ERROR] Duplicate command: $1" >&2; exit 2; }
+      MODE="$1"; shift;;
+    *=*)
+      [[ "$1" == wandb.* ]] && WANDB_OVERRIDE_GIVEN=1
+      OVERRIDES+=("$1"); shift;;
+    *) echo "[ERROR] Unknown argument: $1" >&2; exit 2;;
+  esac
+done
+MODE="${MODE:-inspect}"
+if [[ -n "$CONFIG_PATH" ]]; then
+  CONFIG_PATH="$(python -c 'from pathlib import Path;import sys;print(Path(sys.argv[1]).expanduser().resolve())' "$CONFIG_PATH")"
+fi
+
+CFG_OUT="$(mktemp)"
+trap 'rm -f "$CFG_OUT"' EXIT
+CFG_CMD=(python "$CONFIG_HELPER" --format env0)
+[[ -z "$CONFIG_PATH" ]] || CFG_CMD+=(--toml "$CONFIG_PATH")
+CFG_CMD+=("${OVERRIDES[@]}")
+"${CFG_CMD[@]}" > "$CFG_OUT" || exit 2
+while IFS= read -r -d '' key && IFS= read -r -d '' value; do
+  printf -v "$key" '%s' "$value"
+done < "$CFG_OUT"
+rm -f "$CFG_OUT"
+
+# Paths in TOML may be relative to the project base.
+BASE="$(cd "$BASE" && pwd)"
 FRAMEWORK="${FRAMEWORK:-$BASE/cosmos-framework}"
 PROCESSED="${PROCESSED:-$BASE/processed_virtual_native_v2}"
 TEMPLATE_RUN="${TEMPLATE_RUN:-$BASE/runs_virtual/stage1_joint_300}"
-RUN_TAG="${RUN_TAG:-s1_full_raw_v1}"
-EVAL_TAG="${EVAL_TAG:-val_seed42_v1}"
-GPUS="${GPUS:-4}"
-MAX_ITERS="${MAX_ITERS:-3000}"
-SAVE_EVERY="${SAVE_EVERY:-500}"
-EPOCH_CLIPS="${EPOCH_CLIPS:-12000}"
-LR="${LR:-1e-5}"
-SEED="${SEED:-42}"
-EVAL_CLIPS="${EVAL_CLIPS:-20}"
-STEP="${STEP:-$MAX_ITERS}"
-INFER_GPUS="${INFER_GPUS:-1}"
-GROUND_HEIGHT_M="${GROUND_HEIGHT_M:-1.7}"
+for pathvar in FRAMEWORK PROCESSED TEMPLATE_RUN EDGE_DCP WAN_VAE; do
+  pth="${!pathvar}"
+  if [[ -n "$pth" && "$pth" != /* ]]; then
+    printf -v "$pathvar" '%s' "$BASE/$pth"
+  fi
+done
+if [[ "$MODE" == config ]]; then
+  echo "[TOML] ${CONFIG_PATH:-<default/environment>}"
+  cfg_cmd=(python "$CONFIG_HELPER" --format json)
+  [[ -z "$CONFIG_PATH" ]] || cfg_cmd+=(--toml "$CONFIG_PATH")
+  "${cfg_cmd[@]}" "${OVERRIDES[@]}"
+  exit 0
+fi
 
 S1="$BASE/runs_stage1_full/$RUN_TAG"
 S1_OUTPUT="$S1/outputs/cosmos3_av_id/pretrain/$RUN_TAG"
@@ -44,15 +92,43 @@ done
 (( MAX_ITERS % SAVE_EVERY == 0 )) || fail 'MAX_ITERS must be divisible by SAVE_EVERY for the requested final checkpoint check'
 
 need_file "$PROCESSED/index.jsonl"
-need_file "$TEMPLATE_RUN/run.json"
+if [[ -z "$EDGE_DCP" || -z "$WAN_VAE" ]]; then
+  need_file "$TEMPLATE_RUN/run.json"
+fi
 need_file "$FRAMEWORK/cosmos_framework/scripts/train.py"
-EDGE_DCP="$(python -c 'import json,sys;print(json.load(open(sys.argv[1]))["init_checkpoint"])' "$TEMPLATE_RUN/run.json")"
-WAN_VAE="$(python -c 'import json,sys;print(json.load(open(sys.argv[1]))["wan_vae"])' "$TEMPLATE_RUN/run.json")"
+EDGE_DCP="${EDGE_DCP:-$(python -c 'import json,sys;print(json.load(open(sys.argv[1]))["init_checkpoint"])' "$TEMPLATE_RUN/run.json")}"
+WAN_VAE="${WAN_VAE:-$(python -c 'import json,sys;print(json.load(open(sys.argv[1]))["wan_vae"])' "$TEMPLATE_RUN/run.json")}"
 [[ -d "$EDGE_DCP" ]] || fail "Cosmos3-Edge pretrained checkpoint missing: $EDGE_DCP"
 need_file "$WAN_VAE"
 
 printf '[CONFIG] mode=%s run=%s iter=%s export_step=%s gpus=%s\n' "$MODE" "$RUN_TAG" "$MAX_ITERS" "$STEP" "$GPUS"
 printf '[CONFIG] processed=%s eval=%s\n' "$PROCESSED" "$EVAL"
+printf '[CONFIG] source_toml=%s weights=kitti:%s,waymo:%s wandb=%s\n' \
+  "${CONFIG_PATH:-none}" "$KITTI_WEIGHT" "$WAYMO_WEIGHT" "$WANDB_MODE"
+
+
+# Refuse accidental changes to the training plan between `plan` and `train`.
+# Changes to export/eval settings (including export.step) are allowed.
+check_frozen_config(){
+  [[ -f "$S1/resolved_stage1_config.json" ]] || return 0  # historical runs
+  local actual="$(mktemp)"
+  local cmd=(python "$CONFIG_HELPER" --format json)
+  [[ -z "$CONFIG_PATH" ]] || cmd+=(--toml "$CONFIG_PATH")
+  if ! "${cmd[@]}" "${OVERRIDES[@]}" > "$actual"; then rm -f "$actual"; fail 'Cannot resolve TOML'; fi
+  if ! python - "$S1/resolved_stage1_config.json" "$actual" <<'PYCOMPARE'
+import json,sys
+prev=json.load(open(sys.argv[1])); now=json.load(open(sys.argv[2]))
+keys=('job.run_tag','paths.processed','data.epoch_clips','data.seed',
+      'data.weights.kitti','data.weights.waymo','train.gpus',
+      'train.max_iters','train.save_every','optimizer.lr')
+diffs=[(k,prev.get(k),now.get(k)) for k in keys if prev.get(k)!=now.get(k)]
+if diffs:
+    for k,a,b in diffs: print(f'[CONFIG MISMATCH] {k}: planned={a!r} current={b!r}')
+    sys.exit(1)
+PYCOMPARE
+  then rm -f "$actual"; fail 'Training settings differ from the original plan; use the same TOML or a new RUN_TAG'; fi
+  rm -f "$actual"
+}
 
 inspect(){
   python - "$PROCESSED/index.jsonl" <<'PY'
@@ -89,13 +165,18 @@ PY
 
 plan(){
   [[ ! -e "$S1" ]] || fail "Existing run directory: $S1. Choose a new RUN_TAG (never overwrite)."
-  echo '[PLAN] KITTI + Waymo, raw 9D actions; sampled manifest has 1:1 dataset weights'
+  echo "[PLAN] KITTI + Waymo, raw 9D actions; weights=kitti:$KITTI_WEIGHT,waymo:$WAYMO_WEIGHT"
   python -m cosmos3av.cli plan --stage pretrain --datasets kitti waymo \
-    --weights kitti:1,waymo:1 --processed-root "$PROCESSED" \
+    --weights "kitti:${KITTI_WEIGHT},waymo:${WAYMO_WEIGHT}" --processed-root "$PROCESSED" \
     --init-checkpoint "$EDGE_DCP" --wan-vae "$WAN_VAE" \
     --outdir "$S1" --epoch-clips "$EPOCH_CLIPS" \
     --max-iters "$MAX_ITERS" --save-every "$SAVE_EVERY" --lr "$LR" \
-    --gpus "$GPUS" --seed "$SEED" --full-preflight
+    --gpus "$GPUS" --seed "$SEED" --wandb-mode "${WANDB_MODE:-disabled}" --full-preflight
+  # Store a copy of the declared and resolved experiment configuration.
+  [[ -z "$CONFIG_PATH" ]] || cp "$CONFIG_PATH" "$S1/source_stage1_config.toml"
+  json_cmd=(python "$CONFIG_HELPER" --format json)
+  [[ -z "$CONFIG_PATH" ]] || json_cmd+=(--toml "$CONFIG_PATH")
+  "${json_cmd[@]}" "${OVERRIDES[@]}" > "$S1/resolved_stage1_config.json"
   python -m cosmos3av.cli smoke --manifest "$S1/train.jsonl"
   python - "$S1/run.json" <<'PY'
 import json,sys
@@ -108,11 +189,18 @@ PY
 
 train(){
   need_file "$S1/run.json"
+  check_frozen_config
   [[ ! -e "$S1/train.log" ]] || fail "Training log already exists: $S1/train.log (refusing to relaunch implicitly)"
   [[ ! -e "$S1_FINAL_DCP" ]] || fail "Final DCP already exists: $S1_FINAL_DCP"
   unset IMAGINAIRE_OUTPUT_ROOT || true
   echo '[TRAIN] Starting training. Logs and output checkpoints remain under the new run directory.'
-  python -m cosmos3av.cli launch --run-dir "$S1" --framework-root "$FRAMEWORK" --execute 2>&1 | tee "$S1/train.log"
+  # Without a new TOML/env override, preserve the mode saved by `plan`.
+  local extra=()
+  if [[ -n "$CONFIG_PATH" || -n "$WANDB_ENV_GIVEN" || "$WANDB_OVERRIDE_GIVEN" == 1 ]]; then
+    extra=(--wandb-mode "$WANDB_MODE")
+  fi
+  python -m cosmos3av.cli launch --run-dir "$S1" --framework-root "$FRAMEWORK" \
+    "${extra[@]}" --execute 2>&1 | tee "$S1/train.log"
   need_dcp "$S1_FINAL_DCP"
   echo "[TRAIN OK] $S1_FINAL_DCP"
 }
@@ -205,7 +293,19 @@ infer(){
 score(){
   need_file "$EVAL/selection.jsonl"
   [[ -d "$PRED" ]] || fail "Missing predictions: $PRED"
-  python -m cosmos3eval.cli score --eval-dir "$EVAL" --pred-dir "$PRED" --model "${RUN_TAG}_iter_${STEP}" 
+  # With no explicit TOML/env/CLI W&B setting, inherit the saved plan mode.
+  local mode="$WANDB_MODE"
+  if [[ -z "$CONFIG_PATH" && -z "$WANDB_ENV_GIVEN" && "$WANDB_OVERRIDE_GIVEN" == 0 ]]; then
+    mode="$(python - "$S1/run.json" <<'PYMODE'
+import json,sys
+print(json.load(open(sys.argv[1])).get('wandb_mode','disabled'))
+PYMODE
+)"
+  fi
+  python -m cosmos3eval.cli score --eval-dir "$EVAL" --pred-dir "$PRED" \
+    --model "${RUN_TAG}_iter_${STEP}" \
+    --wandb-mode "$mode" --wandb-project cosmos3_av_id --wandb-group pretrain \
+    --wandb-name "eval_${RUN_TAG}_iter_${STEP}_${EVAL_TAG}"
   python - "$PRED/metrics/summary.json" <<'PY'
 import json,sys
 p=sys.argv[1]; summary=json.load(open(p)); d=summary['overall']
@@ -233,8 +333,8 @@ PY
     [[ -n "$cid" ]] || fail "No selected $ds clip"
     echo "[RENDER] $ds clip=$cid, ground_height_m=$GROUND_HEIGHT_M (approximate)"
     python -m cosmos3eval.cli render --eval-dir "$EVAL" --pred-dir "$PRED" \
-      --clip-id "$cid" --layout both --horizon-steps 30 \
-      --ground-height-m "$GROUND_HEIGHT_M" --out-dir "$PRED/qualitative/$ds"
+      --clip-id "$cid" --layout "$RENDER_LAYOUT" --horizon-steps "$HORIZON_STEPS" \
+      --ground-height-m "$GROUND_HEIGHT_M" --fps "$RENDER_FPS" --out-dir "$PRED/qualitative/$ds"
   done
   echo "[RENDER OK] $PRED/qualitative/{kitti,waymo}/"
 }
@@ -251,5 +351,5 @@ case "$MODE" in
   render) render;;
   evaluate) prepare_eval; oracle; infer; score; render;;
   all) inspect; plan; train; export_model; prepare_eval; oracle; infer; score; render;;
-  *) fail 'Usage: bash stage1_full_train_eval.sh inspect|plan|train|export|prepare|oracle|infer|score|render|evaluate|all';;
+  *) fail 'Usage: bash stage1_full_train_eval.sh [--toml FILE] inspect|config|plan|train|export|prepare|oracle|infer|score|render|evaluate|all [section.key=value]';;
 esac

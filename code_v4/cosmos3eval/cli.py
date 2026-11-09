@@ -63,6 +63,27 @@ def infer_cmd(a):
     _call(cmd,root,a.execute)
 
 
+def score_cmd(a):
+    from .wandb_logging import log_evaluation
+    result = score(a.eval_dir, a.pred_dir, a.out, a.model, a.allow_padded_output,
+                   not a.no_plots, a.oracle, a.skip_missing)
+    if a.wandb_mode != 'disabled':
+        if a.oracle:
+            print('[WANDB] Skipping GT Oracle (not a model result)')
+        else:
+            log_evaluation(
+                summary=result,
+                metrics_dir=Path(a.out) if a.out else Path(a.pred_dir) / 'metrics',
+                mode=a.wandb_mode,
+                project=a.wandb_project,
+                group=a.wandb_group,
+                name=a.wandb_name or f'eval_{a.model}',
+                eval_dir=a.eval_dir,
+                pred_dir=a.pred_dir,
+            )
+    return result
+
+
 def render_cmd(a):
     if a.ego_height_m is not None:
         if a.ground_height_m is not None and a.ground_height_m!=a.ego_height_m:
@@ -117,8 +138,13 @@ def main(argv=None):
     p.add_argument('--allow-padded-output',action='store_true')
     p.add_argument('--no-plots',action='store_true');p.add_argument('--skip-missing',action='store_true')
     p.add_argument('--oracle',action='store_true')
-    p.set_defaults(func=lambda a:score(a.eval_dir,a.pred_dir,a.out,a.model,a.allow_padded_output,
-                                      not a.no_plots,a.oracle,a.skip_missing))
+    p.add_argument('--wandb-mode', choices=['disabled','online','offline'], default='disabled',
+                   help='W&B logging for evaluation; disabled by default')
+    p.add_argument('--wandb-project', default='cosmos3_av_id')
+    p.add_argument('--wandb-group', default=None,
+                   help='Set to pretrain or posttrain to group with native trainer runs')
+    p.add_argument('--wandb-name', default=None)
+    p.set_defaults(func=score_cmd)
     p=sub.add_parser('compare')
     p.add_argument('--summaries',nargs='+',required=True);p.add_argument('--out',required=True)
     p.set_defaults(func=lambda a:compare(a.summaries,a.out))
