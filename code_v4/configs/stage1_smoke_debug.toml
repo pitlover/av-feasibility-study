@@ -1,0 +1,44 @@
+# Independent smoke test: Cosmos3-Edge -> KITTI+Waymo
+# Does NOT modify runs_stage1_full/s1_raw_v2.
+
+[job]
+run_tag = "s1_smoke_debug_01"
+eval_tag = "smoke_val_01"
+
+[paths]
+processed = "processed_virtual_native_v2"
+framework = "cosmos-framework"
+template_run = "runs_virtual/stage1_joint_300"
+edge_dcp = "/mnt/ufs/users/jiyoung-kim/project/backend/cosmos/cookbooks/cosmos3/generator/action/finetune/checkpoints/Cosmos3-Edge"
+wan_vae = "/mnt/ufs/users/jiyoung-kim/project/backend/cosmos/cookbooks/cosmos3/generator/action/finetune/checkpoints/wan22_vae/Wan2.2_VAE.pth"
+
+[data]
+epoch_clips = 100
+seed = 42
+
+[data.weights]
+kitti = 1.0
+waymo = 1.0
+
+[train]
+gpus = 4
+max_iters = 10
+save_every = 10
+
+[optimizer]
+lr = 1e-5
+
+[wandb]
+enabled = false
+mode = "disabled"
+
+[export]
+step = 0
+
+[eval]
+clips_per_dataset = 2
+infer_gpus = 1
+ground_height_m = 1.7
+horizon_steps = 60
+fps = 10
+layout = "both"

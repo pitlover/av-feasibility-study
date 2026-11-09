@@ -1,0 +1,42 @@
+# Short 10-iteration test to verify Stage1 DCP -> AV2 Stage2 end-to-end.
+# Use this BEFORE configs/stage2_full.toml.
+
+[job]
+run_tag = "s2_smoke_debug_01"
+eval_tag = "smoke_debug_val_01"
+
+[paths]
+processed = "processed_virtual_native_v2"
+framework = "cosmos-framework"
+
+stage1_run = "runs_stage1_full/s1_smoke_debug_01"
+stage1_checkpoint = "runs_stage1_full/s1_smoke_debug_01/outputs/cosmos3_av_id/pretrain/s1_smoke_debug_01/checkpoints/iter_000000010"
+
+wan_vae = "/mnt/ufs/users/jiyoung-kim/project/backend/cosmos/cookbooks/cosmos3/generator/action/finetune/checkpoints/wan22_vae/Wan2.2_VAE.pth"
+
+[data]
+epoch_clips = 100
+seed = 42
+
+[train]
+gpus = 4
+max_iters = 10
+save_every = 10
+
+[optimizer]
+lr = 1e-5
+
+[wandb]
+enabled = false
+mode = "disabled"
+
+[export]
+step = 0
+
+[eval]
+clips_per_dataset = 3
+infer_gpus = 1
+ground_height_m = 1.7
+horizon_steps = 60
+fps = 10
+layout = "both"

@@ -1,0 +1,40 @@
+# Stage2: existing Stage1 (s1_raw_v2, iter 3000) -> Argoverse2 post-training.
+# DO NOT rerun Stage1. This file is consumed by stage2_full_train_eval.sh.
+
+[job]
+run_tag = "s2_av2_baseline_v1"
+eval_tag = "val_seed42_v1"
+
+[paths]
+processed = "processed_virtual_native_v2"
+framework = "cosmos-framework"
+stage1_run = "runs_stage1_full/s1_raw_v2"
+stage1_checkpoint = "runs_stage1_full/s1_raw_v2/outputs/cosmos3_av_id/pretrain/s1_raw_v2/checkpoints/iter_000003000"
+wan_vae = "/mnt/ufs/users/jiyoung-kim/project/backend/cosmos/cookbooks/cosmos3/generator/action/finetune/checkpoints/wan22_vae/Wan2.2_VAE.pth"
+
+[data]
+epoch_clips = 12000
+seed = 42
+
+[train]
+gpus = 4
+max_iters = 3000
+save_every = 500
+
+[optimizer]
+lr = 1e-5
+
+[wandb]
+enabled = false
+mode = "disabled"          # disabled | online | offline
+
+[export]
+step = 0                   # 0 -> train.max_iters
+
+[eval]
+clips_per_dataset = 20
+infer_gpus = 1
+ground_height_m = 1.7
+horizon_steps = 60
+fps = 10
+layout = "both"
