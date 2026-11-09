@@ -1,0 +1,34 @@
+[job]
+run_tag = "s2_repro_v1"
+eval_tag = "s2_repro_v1"
+
+[paths]
+base = "."
+framework = "cosmos-framework"
+processed = "processed_virtual_native_v2"
+template_run = "runs_virtual/stage1_joint_300"
+edge_dcp = "/mnt/ufs/users/jiyoung-kim/project/backend/cosmos/cookbooks/cosmos3/generator/action/finetune/checkpoints/Cosmos3-Edge"
+wan_vae = "/mnt/ufs/users/jiyoung-kim/project/backend/cosmos/cookbooks/cosmos3/generator/action/finetune/checkpoints/wan22_vae/Wan2.2_VAE.pth"
+
+[data]
+epoch_clips = 500
+seed = 42
+match_clip_id = "av2_02678d04-cc9f-3148-9f95-1ba66347dff9_000000"
+
+[data.weights]
+kitti = 1.0
+waymo = 1.0
+
+[train]
+gpus = 4
+max_iters = 300
+save_every = 50
+
+[eval]
+clips_per_dataset = 5
+infer_gpus = 1
+
+[wandb]
+enabled = true
+mode = "offline"   # online | offline | disabled
+project = "cosmos3_av_id"
