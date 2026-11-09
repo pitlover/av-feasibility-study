@@ -1,3 +1,0 @@
-torch
-hydra-core
-omegaconf
