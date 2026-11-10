@@ -174,3 +174,7 @@ Offline은 `mode="offline"`. `online`에서는 서버에 `pip install wandb; wan
 ## 검증 범위
 
 Python TOML 파싱, Bash 문법 검사, 스텁 기반 `plan → train → export → full` 및 `score/render/both` 분기 테스트를 수행했습니다. **실제 서버 GPU 및 Cosmos Framework 실행은 이 패키지를 사용하여 검증하지 않았습니다.** 61프레임 `camera_render.py` 수정본과 이전 W&B 평가 연동이 유지되어야 합니다.
+
+## Stage1을 Reptile 메타 사전학습으로 대체하기
+
+`configs/stage1_reptile_v1.toml`(매 meta-iteration에 KITTI+Waymo 둘 다) / `configs/stage1_reptile_v3.toml` 등 `per_dataset` 변형(한 데이터셋씩; 전체 스윕 표는 `README_REPTILE.md`)을 같은 `stage1_full_train_eval.sh` 명령으로 실행하면 됩니다. 출력 구조는 동일하고 최종 DCP의 iter 번호만 `train.max_iters`(meta-iteration 수)로 바뀌므로, Stage2는 `configs/stage2_full.toml`의 `paths.stage1_run` / `paths.stage1_checkpoint` 두 줄만 바꿔 시작합니다. 자세한 내용은 `README_REPTILE.md`.

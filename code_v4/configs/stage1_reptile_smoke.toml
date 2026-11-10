@@ -1,0 +1,72 @@
+# Stage1 REPTILE smoke test: 4 meta-iterations x 2 inner steps on 4 GPUs (~10-15 min incl. model load), W&B off.
+# Checks plan -> train (DCP at iter_000000004) -> export -> evaluate on a NEW run_tag before a real run.
+#   bash stage1_full_train_eval.sh --toml configs/stage1_reptile_smoke.toml plan
+#   bash stage1_full_train_eval.sh --toml configs/stage1_reptile_smoke.toml train
+#   bash stage1_full_train_eval.sh --toml configs/stage1_reptile_smoke.toml export
+#   bash stage1_full_train_eval.sh --toml configs/stage1_reptile_smoke.toml evaluate
+[job]
+run_tag = "s1_reptile_smoke_v1"
+eval_tag = "smoke_seed42_v1"
+
+[paths]
+base = "."
+processed = "processed_virtual_native_v2"
+framework = "cosmos-framework"
+edge_dcp = "/mnt/ufs/users/jiyoung-kim/project/backend/cosmos/cookbooks/cosmos3/generator/action/finetune/checkpoints/Cosmos3-Edge"
+wan_vae = "/mnt/ufs/users/jiyoung-kim/project/backend/cosmos/cookbooks/cosmos3/generator/action/finetune/checkpoints/wan22_vae/Wan2.2_VAE.pth"
+
+[data]
+epoch_clips = 400
+seed = 42
+
+[data.weights]
+kitti = 1.0
+waymo = 1.0
+
+[train]
+gpus = 4
+max_iters = 4                         # meta-iterations
+save_every = 2
+
+[optimizer]
+lr = 1e-5
+
+[wandb]
+enabled = false
+mode = "disabled"
+project = "cosmos3_av_id"
+
+[reptile]
+enabled = true
+episode_mode = "all_datasets"         # exercises the 2-task path (restore between tasks + weighted displacement mean)
+dataset_schedule = "alternate"
+inner_steps = 2
+inner_warmup_steps = 1
+inner_grad_clip = 1.0
+inner_reset_optimizer = true
+meta_lr = 1.0
+meta_lr_min_ratio = 0.1
+meta_lr_warmup_iters = 0
+clips_per_rank = 1
+support_clips = 0
+query_clips_per_rank = 1
+query_sequence_disjoint = true
+eval_query_every = 1                  # zero-shot vs adapted query loss at every meta-iteration
+loss_mode = "total"
+
+[export]
+step = 0                              # -> iter_000000004
+
+[eval]
+mode = "full"
+clips_per_dataset = 2
+infer_gpus = 1
+eval_dir = ""
+pred_dir = ""
+render_enabled = true
+render_max_clips = 1
+render_clip_ids = []
+ground_height_m = 1.7
+horizon_steps = 60
+fps = 10
+layout = "both"

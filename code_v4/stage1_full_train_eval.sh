@@ -9,6 +9,9 @@ set -Eeuo pipefail
 #   bash stage1_full_train_eval.sh --toml configs/stage1_full.toml plan
 #   bash stage1_full_train_eval.sh train --toml configs/stage1_full.toml
 #   bash stage1_full_train_eval.sh --toml configs/stage1_full.toml train.max_iters=500 plan
+# Reptile meta-pretraining instead of joint SFT: a TOML with [reptile] enabled = true
+# (configs/stage1_reptile_v1.toml / stage1_reptile_v2.toml); same commands, same output layout
+# (train.max_iters then counts meta-iterations). See README_REPTILE.md.
 # Priority: dotted CLI assignment > TOML > environment variables > defaults.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_HELPER="$SCRIPT_DIR/scripts/stage1_toml_config.py"
@@ -42,7 +45,8 @@ if [[ -n "$CONFIG_PATH" ]]; then
 fi
 
 CFG_OUT="$(mktemp)"
-trap 'rm -f "$CFG_OUT"' EXIT
+REPTILE_JSON=""
+trap 'rm -f "$CFG_OUT"; [[ -z "${REPTILE_JSON:-}" ]] || rm -f "$REPTILE_JSON"' EXIT
 CFG_CMD=(python "$CONFIG_HELPER" --format env0)
 [[ -z "$CONFIG_PATH" ]] || CFG_CMD+=(--toml "$CONFIG_PATH")
 CFG_CMD+=("${OVERRIDES[@]}")
@@ -116,10 +120,14 @@ case "$MODE" in
   evaluate) [[ "$EVAL_MODE" != full ]] || need_file "$FRAMEWORK/cosmos_framework/scripts/train.py" ;;
 esac
 
-printf '[CONFIG] mode=%s run=%s iter=%s export_step=%s gpus=%s\n' "$MODE" "$RUN_TAG" "$MAX_ITERS" "$STEP" "$GPUS"
+TRAINER=sft
+[[ "$REPTILE_ENABLED" != true ]] || TRAINER=reptile
+printf '[CONFIG] mode=%s run=%s iter=%s export_step=%s gpus=%s trainer=%s\n' "$MODE" "$RUN_TAG" "$MAX_ITERS" "$STEP" "$GPUS" "$TRAINER"
 printf '[CONFIG] processed=%s eval=%s pred=%s eval_mode=%s\n' "$PROCESSED" "$EVAL" "$PRED" "$EVAL_MODE"
 printf '[CONFIG] source_toml=%s weights=kitti:%s,waymo:%s wandb=%s\n' \
   "${CONFIG_PATH:-none}" "$KITTI_WEIGHT" "$WAYMO_WEIGHT" "$WANDB_MODE"
+[[ "$TRAINER" != reptile ]] || printf '[CONFIG] reptile: mode=%s schedule=%s inner_steps=%s meta_lr=%s->x%s clips_per_rank=%s (max_iters = META-iterations)\n' \
+  "$REPTILE_EPISODE_MODE" "$REPTILE_DATASET_SCHEDULE" "$REPTILE_INNER_STEPS" "$REPTILE_META_LR" "$REPTILE_META_LR_MIN_RATIO" "$REPTILE_CLIPS_PER_RANK"
 
 
 # Refuse accidental changes to the training plan between `plan` and `train`.
@@ -136,6 +144,8 @@ prev=json.load(open(sys.argv[1])); now=json.load(open(sys.argv[2]))
 keys=('job.run_tag','paths.processed','data.epoch_clips','data.seed',
       'data.weights.kitti','data.weights.waymo','train.gpus',
       'train.max_iters','train.save_every','optimizer.lr')
+# Reptile knobs are part of the training plan too (plans made before the [reptile] table existed have none).
+keys+=tuple(sorted(k for k in set(prev)|set(now) if k.startswith('reptile.')))
 diffs=[(k,prev.get(k),now.get(k)) for k in keys if prev.get(k)!=now.get(k)]
 if diffs:
     for k,a,b in diffs: print(f'[CONFIG MISMATCH] {k}: planned={a!r} current={b!r}')
@@ -181,24 +191,38 @@ PY
 plan(){
   [[ ! -e "$S1" ]] || fail "Existing run directory: $S1. Choose a new RUN_TAG (never overwrite)."
   echo "[PLAN] KITTI + Waymo, raw 9D actions; weights=kitti:$KITTI_WEIGHT,waymo:$WAYMO_WEIGHT"
+  # [reptile] enabled: hand the resolved Reptile knobs to the planner; it copies them into the run dir
+  # (reptile_config.json), writes the unique-clip manifest and marks run.json trainer=reptile.
+  local reptile_args=()
+  if [[ "$TRAINER" == reptile ]]; then
+    REPTILE_JSON="$(mktemp)"
+    local rcmd=(python "$CONFIG_HELPER" --format reptile-json)
+    [[ -z "$CONFIG_PATH" ]] || rcmd+=(--toml "$CONFIG_PATH")
+    "${rcmd[@]}" "${OVERRIDES[@]}" > "$REPTILE_JSON" || fail 'Cannot resolve the [reptile] settings'
+    reptile_args=(--reptile-config "$REPTILE_JSON")
+    echo "[PLAN] Reptile meta-pretraining: episode_mode=$REPTILE_EPISODE_MODE inner_steps=$REPTILE_INNER_STEPS meta_lr=$REPTILE_META_LR; $MAX_ITERS meta-iterations"
+  fi
   python -m cosmos3av.cli plan --stage pretrain --datasets kitti waymo \
     --weights "kitti:${KITTI_WEIGHT},waymo:${WAYMO_WEIGHT}" --processed-root "$PROCESSED" \
     --init-checkpoint "$EDGE_DCP" --wan-vae "$WAN_VAE" \
     --outdir "$S1" --epoch-clips "$EPOCH_CLIPS" \
     --max-iters "$MAX_ITERS" --save-every "$SAVE_EVERY" --lr "$LR" \
-    --gpus "$GPUS" --seed "$SEED" --wandb-mode "${WANDB_MODE:-disabled}" --full-preflight
+    --gpus "$GPUS" --seed "$SEED" --wandb-mode "${WANDB_MODE:-disabled}" --full-preflight "${reptile_args[@]}"
   # Store a copy of the declared and resolved experiment configuration.
   [[ -z "$CONFIG_PATH" ]] || cp "$CONFIG_PATH" "$S1/source_stage1_config.toml"
   json_cmd=(python "$CONFIG_HELPER" --format json)
   [[ -z "$CONFIG_PATH" ]] || json_cmd+=(--toml "$CONFIG_PATH")
   "${json_cmd[@]}" "${OVERRIDES[@]}" > "$S1/resolved_stage1_config.json"
   python -m cosmos3av.cli smoke --manifest "$S1/train.jsonl"
-  python - "$S1/run.json" <<'PY'
+  python - "$S1/run.json" "$TRAINER" <<'PY'
 import json,sys
-r=json.load(open(sys.argv[1]))
+r=json.load(open(sys.argv[1])); want=sys.argv[2]
 assert r['stage']=='pretrain' and r['action_frame']=='camera'
 assert r['action_normalizer'] is None, 'This baseline must remain RAW action'
-print('[PLAN OK] raw camera actions; train entries:',r['n_train'],'val entries:',r['n_val'])
+got=r.get('trainer','sft')
+assert got==want, f'run.json trainer={got!r} but the TOML asked for {want!r}'
+print('[PLAN OK] raw camera actions; trainer:',got,'; train entries:',r['n_train'],'val entries:',r['n_val'])
+if got=='reptile': print('[PLAN OK] reptile config:',r['reptile_config'],'| unique clips:',r.get('reptile_clips'))
 PY
 }
 

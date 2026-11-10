@@ -33,9 +33,23 @@ def _weights(value: str, selected: list[str]):
     return res
 
 
-def _toml(stage: str, name: str, iters: int, lr: float, save_every: int, gpus: int, wandb_mode: str = "disabled") -> str:
+REPTILE_TOML_TAIL = '''
+# Reptile meta-pretraining (cosmos3av.reptile_train): theta is the smoothed quantity, so the EMA copy is
+# dropped (its memory goes to the theta copy). trainer.max_iter counts META-iterations.
+[model.ema]
+enabled = false
+'''
+
+
+def _toml(stage: str, name: str, iters: int, lr: float, save_every: int, gpus: int, wandb_mode: str = "disabled",
+          reptile: bool = False) -> str:
     if wandb_mode not in ("disabled", "online", "offline"):
         raise ValueError(f"Unknown W&B mode: {wandb_mode}")
+    text = _toml_body(stage, name, iters, lr, save_every, gpus, wandb_mode)
+    return text + REPTILE_TOML_TAIL if reptile else text
+
+
+def _toml_body(stage: str, name: str, iters: int, lr: float, save_every: int, gpus: int, wandb_mode: str) -> str:
     # The official Edge action-SFT combination is unvalidated; start with few steps.
     return f'''# EXPERIMENTAL AV inverse dynamics adaptation of official Cosmos3 action SFT.
 [job]
@@ -129,6 +143,18 @@ def plan(args):
     if args.ack_custom_action_normalizer and args.stage == 'pretrain' and not norm_path:
         raise ValueError('Do not acknowledge a normalizer unless --action-normalizer is set')
     weights = _weights(args.weights, selected)
+    reptile_cfg = None
+    if args.reptile_config:
+        # Stage 1 only: Stage 2 is the ordinary post-training that consumes a (joint or Reptile) Stage 1 DCP.
+        if args.stage != 'pretrain':
+            raise ValueError('--reptile-config is a Stage 1 (pretrain) option')
+        from .reptile import ReptileConfig
+        raw = json.loads(Path(args.reptile_config).expanduser().read_text(encoding='utf8'))
+        if raw.pop('enabled', True) is False:
+            raise ValueError(f'{args.reptile_config}: "enabled": false -- not a Reptile plan')
+        raw.pop('datasets', None); raw.pop('dataset_weights', None); raw.pop('manifest', None)
+        raw.update(datasets=list(selected), dataset_weights={k: float(v) for k, v in weights.items()})
+        reptile_cfg = ReptileConfig.from_dict(raw)  # validates knobs + schedule/weights consistency
     run_dir = Path(args.outdir).expanduser().resolve()
     if run_dir.exists() and (run_dir / 'run.json').exists() and not args.overwrite_plan:
         raise FileExistsError(f'Plan already exists: {run_dir}. Use a distinct --outdir or --overwrite-plan.')
@@ -159,8 +185,27 @@ def plan(args):
     manifest = run_dir / 'train.jsonl'
     write_jsonl(manifest, samples)
     write_jsonl(run_dir / 'val.jsonl', val_rows)
+    reptile_detail = {}
+    if reptile_cfg is not None:
+        # Reptile samples clips itself: one manifest with every unique train clip (sorted by clip_id -> identical
+        # tables on every rank). train.jsonl stays the canonical manifest of the experiment config / export.
+        from .reptile import ClipTables, ReptileEpisodeSampler, unique_rows
+        unique_manifest = run_dir / 'train_unique.jsonl'
+        unique = unique_rows(train_rows)
+        write_jsonl(unique_manifest, unique)
+        reptile_cfg.manifest = str(unique_manifest)
+        tables = ClipTables(unique)
+        sampler = ReptileEpisodeSampler(tables, reptile_cfg, args.gpus)  # raises on an impossible geometry
+        reptile_path = reptile_cfg.save(run_dir / 'reptile_config.json')
+        reptile_detail = dict(trainer='reptile', reptile_config=str(reptile_path), train_unique_manifest=str(unique_manifest),
+                              reptile_clips=tables.summary(),
+                              reptile_support_clips_per_task=sampler.support_size,
+                              reptile_query_clips_per_task=sampler.query_size)
+        print(f'[reptile] mode={reptile_cfg.episode_mode} schedule={reptile_cfg.dataset_schedule} '
+              f'inner_steps={reptile_cfg.inner_steps} support={sampler.support_size} query={sampler.query_size} clips/task; '
+              f'{args.max_iters} meta-iterations; unique clips {tables.summary()}')
     (run_dir / 'sft_config.toml').write_text(_toml(args.stage, run_dir.name, args.max_iters,
-                args.lr, args.save_every, args.gpus, args.wandb_mode), encoding='utf8')
+                args.lr, args.save_every, args.gpus, args.wandb_mode, reptile=reptile_cfg is not None), encoding='utf8')
     detail = dict(stage=args.stage, datasets=selected, weights=weights,
         init_checkpoint=str(ckpt), wan_vae=str(vae), processed_root=str(root),
         train_manifest=str(manifest), val_manifest=str(run_dir/'val.jsonl'),
@@ -171,7 +216,9 @@ def plan(args):
         wandb_mode=args.wandb_mode, wandb_project='cosmos3_av_id',
         wandb_group=args.stage, wandb_name=run_dir.name,
         caveat='EXPERIMENTAL: AV ID is not an NVIDIA validated SFT recipe; checkpoint action norm and head compatibility must be tested.',
+        trainer='sft',
     )
+    detail.update(reptile_detail)
     (run_dir / 'run.json').write_text(json.dumps(detail, indent=2), encoding='utf8')
     print(f'[ready] {run_dir} with {len(samples)} train sampled entries and {len(val_rows)} val entries')
     print('Launch (from cosmos-framework root with this project on PYTHONPATH):')
@@ -228,8 +275,21 @@ def launch(args):
         if args.execute:
             wandb_dir.mkdir(parents=True, exist_ok=True)
         env.setdefault('WANDB_DIR', str(wandb_dir))
-    cmd = [sys.executable, '-m', 'torch.distributed.run', '--standalone', f'--nproc_per_node={detail["gpus"]}',
-           '-m', 'cosmos3av.entry', f'--sft-toml={selected_toml}']
+    trainer = detail.get('trainer', 'sft')
+    if trainer == 'reptile':
+        # Reptile meta-pretraining (plan --reptile-config): same experiment, different training loop.
+        reptile_config = Path(detail['reptile_config'])
+        if not reptile_config.is_file():
+            raise FileNotFoundError(f'run.json names a Reptile config that does not exist: {reptile_config}')
+        if '[model.ema]' not in toml_text:
+            raise RuntimeError(f'{rd / "sft_config.toml"} lacks the [model.ema] enabled=false block that a Reptile plan writes')
+        entry = ['-m', 'cosmos3av.entry_reptile', f'--sft-toml={selected_toml}', f'--reptile-config={reptile_config}']
+    elif trainer == 'sft':
+        entry = ['-m', 'cosmos3av.entry', f'--sft-toml={selected_toml}']
+    else:
+        raise ValueError(f'Unknown trainer {trainer!r} in {rd / "run.json"}')
+    cmd = [sys.executable, '-m', 'torch.distributed.run', '--standalone', f'--nproc_per_node={detail["gpus"]}', *entry]
+    print(f'[TRAINER] {trainer}')
     print(' '.join(shlex.quote(x) for x in cmd))
     print('Manifest:', detail['train_manifest'])
     print('Checkpoint:', detail['init_checkpoint'])
@@ -310,6 +370,9 @@ def main(argv=None):
     q.add_argument('--full-preflight',action='store_true')
     q.add_argument('--check-video',action='store_true')
     q.add_argument('--overwrite-plan',action='store_true')
+    q.add_argument('--reptile-config',default=None,
+                   help='Stage 1 only: JSON with the [reptile] knobs (scripts/stage1_toml_config.py --format reptile-json). '
+                        'The run then trains with cosmos3av.reptile_train (Reptile meta-pretraining) instead of joint SFT.')
     q.set_defaults(func=plan)
     x=sub.add_parser('launch',help='inspect command; use --execute for real experimental training')
     x.add_argument('--run-dir',required=True)

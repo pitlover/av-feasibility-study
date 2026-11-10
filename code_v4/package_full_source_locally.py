@@ -9,9 +9,10 @@ import argparse
 from pathlib import Path
 from zipfile import ZipFile, ZIP_DEFLATED
 
-CODE_DIRS = ('cosmos3prep', 'cosmos3av', 'cosmos3eval', 'cosmos3virtual', 'scripts', 'tests')
+CODE_DIRS = ('cosmos3prep', 'cosmos3av', 'cosmos3eval', 'cosmos3virtual', 'scripts', 'tests', 'configs')
 ROOT_FILES = ('README.md', 'README_V4.md', 'V2_SYNC.md', 'check_config_contract.py',
-              'requirements-base.txt', 'requirements-eval.txt', 'requirements-planning.txt')
+              'requirements-base.txt', 'requirements-eval.txt', 'requirements-planning.txt',
+              'stage1_full_train_eval.sh', 'stage2_full_train_eval.sh', 'README_REPTILE.md', 'README_실행가이드.md')
 ALLOWED_EXT = {'.py', '.md', '.txt', '.sh', '.toml', '.yaml', '.yml', '.json'}
 BLOCKED_PARTS = {'.git', '__pycache__', '.pytest_cache', '.v2_metadata_backup', 'outputs', 'processed',
                  'processed_v4', 'processed_virtual_native_v2', 'runs', 'runs_virtual',

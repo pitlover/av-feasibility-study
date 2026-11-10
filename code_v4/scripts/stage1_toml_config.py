@@ -49,7 +49,73 @@ SCHEMA = {
     "wandb.mode": ("WANDB_MODE", str, "disabled", "WANDB_MODE"),
     "wandb.project": ("WANDB_PROJECT", str, "cosmos3_av_id", "WANDB_PROJECT"),
     "wandb.enabled": ("WANDB_ENABLED", bool, None, "WANDB_ENABLED"),
+    # [reptile]: Stage 1 Reptile meta-pretraining instead of joint SFT (cosmos3av/reptile.py documents every knob).
+    # With enabled=true, train.max_iters counts META-iterations and the final DCP is iter_<max_iters>.
+    "reptile.enabled": ("REPTILE_ENABLED", bool, False, "REPTILE_ENABLED"),
+    "reptile.episode_mode": ("REPTILE_EPISODE_MODE", str, "per_dataset", "REPTILE_EPISODE_MODE"),
+    "reptile.dataset_schedule": ("REPTILE_DATASET_SCHEDULE", str, "alternate", "REPTILE_DATASET_SCHEDULE"),
+    "reptile.inner_steps": ("REPTILE_INNER_STEPS", int, 10, "REPTILE_INNER_STEPS"),
+    "reptile.inner_warmup_steps": ("REPTILE_INNER_WARMUP_STEPS", int, 2, "REPTILE_INNER_WARMUP_STEPS"),
+    "reptile.inner_grad_clip": ("REPTILE_INNER_GRAD_CLIP", float, 1.0, "REPTILE_INNER_GRAD_CLIP"),
+    "reptile.inner_reset_optimizer": ("REPTILE_INNER_RESET_OPTIMIZER", bool, True, "REPTILE_INNER_RESET_OPTIMIZER"),
+    "reptile.meta_lr": ("REPTILE_META_LR", float, 0.5, "REPTILE_META_LR"),
+    "reptile.meta_lr_min_ratio": ("REPTILE_META_LR_MIN_RATIO", float, 0.1, "REPTILE_META_LR_MIN_RATIO"),
+    "reptile.meta_lr_warmup_iters": ("REPTILE_META_LR_WARMUP_ITERS", int, 0, "REPTILE_META_LR_WARMUP_ITERS"),
+    "reptile.clips_per_rank": ("REPTILE_CLIPS_PER_RANK", int, 1, "REPTILE_CLIPS_PER_RANK"),
+    "reptile.support_clips": ("REPTILE_SUPPORT_CLIPS", int, 0, "REPTILE_SUPPORT_CLIPS"),
+    "reptile.query_clips_per_rank": ("REPTILE_QUERY_CLIPS_PER_RANK", int, 1, "REPTILE_QUERY_CLIPS_PER_RANK"),
+    "reptile.query_sequence_disjoint": ("REPTILE_QUERY_SEQUENCE_DISJOINT", bool, True, "REPTILE_QUERY_SEQUENCE_DISJOINT"),
+    "reptile.eval_query_every": ("REPTILE_EVAL_QUERY_EVERY", int, 10, "REPTILE_EVAL_QUERY_EVERY"),
+    "reptile.loss_mode": ("REPTILE_LOSS_MODE", str, "total", "REPTILE_LOSS_MODE"),
 }
+
+REPTILE_EPISODE_MODES = ("per_dataset", "all_datasets", "mixed")
+REPTILE_DATASET_SCHEDULES = ("alternate", "random")
+REPTILE_LOSS_MODES = ("total", "action")
+# keys that must not change between `plan` and `train` (mirrors check_frozen_config in stage1_full_train_eval.sh)
+REPTILE_FROZEN_KEYS = tuple(k for k in SCHEMA if k.startswith("reptile."))
+
+
+def validate_reptile(values: dict[str, object]) -> None:
+    """Cross-field checks of the [reptile] table (the same rules as cosmos3av.reptile.ReptileConfig, kept
+    dependency-free so the shell can fail before any Python package is imported)."""
+    if values["reptile.episode_mode"] not in REPTILE_EPISODE_MODES:
+        raise ValueError(f"reptile.episode_mode must be one of {REPTILE_EPISODE_MODES}")
+    if values["reptile.dataset_schedule"] not in REPTILE_DATASET_SCHEDULES:
+        raise ValueError(f"reptile.dataset_schedule must be one of {REPTILE_DATASET_SCHEDULES}")
+    if values["reptile.loss_mode"] not in REPTILE_LOSS_MODES:
+        raise ValueError(f"reptile.loss_mode must be one of {REPTILE_LOSS_MODES}")
+    for k in ("reptile.inner_steps", "reptile.clips_per_rank", "reptile.query_clips_per_rank"):
+        if values[k] < 1:
+            raise ValueError(f"{k} must be >= 1")
+    for k in ("reptile.inner_warmup_steps", "reptile.meta_lr_warmup_iters", "reptile.support_clips",
+              "reptile.eval_query_every", "reptile.inner_grad_clip"):
+        if values[k] < 0:
+            raise ValueError(f"{k} must be >= 0")
+    if values["reptile.inner_warmup_steps"] > values["reptile.inner_steps"]:
+        raise ValueError("reptile.inner_warmup_steps must be <= reptile.inner_steps")
+    if not (0.0 < values["reptile.meta_lr"] <= 1.0):
+        raise ValueError("reptile.meta_lr (Reptile eps) must be in (0, 1]")
+    if not (0.0 < values["reptile.meta_lr_min_ratio"] <= 1.0):
+        raise ValueError("reptile.meta_lr_min_ratio must be in (0, 1]")
+    if values["reptile.query_clips_per_rank"] % values["reptile.clips_per_rank"]:
+        raise ValueError("reptile.query_clips_per_rank must be a multiple of reptile.clips_per_rank (packed batches never mix roles)")
+    min_support = values["train.gpus"] * values["reptile.clips_per_rank"]
+    if values["reptile.support_clips"] and values["reptile.support_clips"] < min_support:
+        raise ValueError(f"reptile.support_clips must be 0 (fresh clips every step) or >= train.gpus * clips_per_rank = {min_support}")
+    if values["reptile.episode_mode"] == "per_dataset" and values["reptile.dataset_schedule"] == "alternate":
+        if abs(values["data.weights.kitti"] - values["data.weights.waymo"]) > 1e-9:
+            raise ValueError("reptile.dataset_schedule='alternate' visits both datasets equally; use equal data.weights or dataset_schedule='random'")
+
+
+def reptile_json(values: dict[str, object]) -> dict[str, object]:
+    """The [reptile] table as the JSON cosmos3av.cli plan --reptile-config consumes (ReptileConfig fields only;
+    plan adds datasets / dataset_weights / manifest itself)."""
+    if not values["reptile.enabled"]:
+        raise ValueError("reptile.enabled is false: this TOML is a joint-training (SFT) Stage 1 plan")
+    out = {k.split(".", 1)[1]: v for k, v in values.items() if k.startswith("reptile.") and k != "reptile.enabled"}
+    out["seed"] = values["data.seed"]
+    return out
 
 
 def flatten(d: dict, prefix: str = "") -> dict[str, object]:
@@ -184,22 +250,31 @@ def read_config(path: str | None, overrides: list[str]) -> dict[str, object]:
         raise ValueError("job.run_tag must use only letters, digits, _ and -")
     if not re.fullmatch(r"[A-Za-z0-9_-]+", values["job.eval_tag"]):
         raise ValueError("job.eval_tag must use only letters, digits, _ and -")
+    if values["reptile.enabled"]:
+        validate_reptile(values)
     return values
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--toml", default=None)
-    ap.add_argument("--format", choices=["env0", "json"], default="env0")
+    ap.add_argument("--format", choices=["env0", "json", "reptile-json"], default="env0",
+                    help="env0: NUL-delimited env assignments; json: every resolved key; "
+                         "reptile-json: the [reptile] table for cosmos3av.cli plan --reptile-config")
     ap.add_argument("overrides", nargs="*")
     args = ap.parse_args(argv)
     try:
         values = read_config(args.toml, args.overrides)
+        if args.format == "reptile-json":
+            payload = reptile_json(values)
     except (OSError, ValueError, tomllib.TOMLDecodeError) as ex:
         print(f"[TOML ERROR] {ex}", file=sys.stderr)
         return 2
     if args.format == "json":
         json.dump(values, sys.stdout, indent=2, ensure_ascii=False)
+        sys.stdout.write("\n")
+    elif args.format == "reptile-json":
+        json.dump(payload, sys.stdout, indent=2, ensure_ascii=False)
         sys.stdout.write("\n")
     else:
         for dotted, (env_name, _, _, _) in SCHEMA.items():
