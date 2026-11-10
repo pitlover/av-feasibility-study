@@ -1,7 +1,7 @@
 # Stage2: load EXISTING Stage1 DCP -> AV2 post-training (camera-relative raw 9D)
 # Must match Stage1 run_tag and its actual checkpoint.
 [job]
-run_step = "config"   # config | inspect | plan | train | export | evaluate | all
+run_step = "all"   # config | inspect | plan | train | export | evaluate | all
 run_tag = "s2_av2_pipeline_v1"          # independent Stage2 run name
 eval_tag = "val_seed42_v1"
 

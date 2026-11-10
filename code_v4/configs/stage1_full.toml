@@ -1,7 +1,7 @@
 # Stage1: Cosmos3-Edge -> KITTI + Waymo (camera-relative raw 9D)
 # Commands: bash stage1_full_train_eval.sh --toml configs/stage1_full.toml plan|train|export|evaluate
 [job]
-run_step = "config"   # config | inspect | plan | train | export | evaluate | all
+run_step = "all"   # config | inspect | plan | train | export | evaluate | all
 run_tag = "s1_pipeline_v1"               # New unique run; do not overwrite past training
 eval_tag = "val_seed42_v1"
 
