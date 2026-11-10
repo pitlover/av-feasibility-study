@@ -55,7 +55,7 @@ eval_query_every = 1                  # zero-shot vs adapted query loss at every
 loss_mode = "total"
 
 [export]
-step = 0                              # -> iter_000000004
+step = 0                              # 0 -> train.max_iters (= iter_000000004)
 
 [eval]
 mode = "full"

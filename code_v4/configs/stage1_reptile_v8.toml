@@ -59,7 +59,7 @@ eval_query_every = 10                 # 2 extra forward passes every 10 meta-ite
 loss_mode = "total"                   # the recipe objective (vision + action flow matching), as in the baseline
 
 [export]
-step = 0                              # 0 -> train.max_iters (= iter_000001000)
+step = 0                              # 0 -> train.max_iters (= iter_000002000)
 
 [eval]
 mode = "full"                         # full (infer+score+render) | score | render | both
