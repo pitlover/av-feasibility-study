@@ -1,0 +1,193 @@
+{
+  "format": "cosmos3_virtual_camera_v2",
+  "clip_id": "kitti_09_000000",
+  "dataset": "kitti",
+  "split": "val",
+  "sequence": "09",
+  "camera": "image_2",
+  "fps": 10,
+  "frame_count": 61,
+  "action_count": 60,
+  "video_codec": "h264",
+  "video_size_wh": [
+    640,
+    384
+  ],
+  "virtual_hfov_deg": 45.0,
+  "K_virtual": [
+    [
+      772.5483399593904,
+      0.0,
+      320.0
+    ],
+    [
+      0.0,
+      772.5483399593904,
+      192.0
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "K_video": [
+    [
+      772.5483399593904,
+      0.0,
+      320.0
+    ],
+    [
+      0.0,
+      772.5483399593904,
+      192.0
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "virtual_camera_definition": "optical +X right, +Y down, +Z forward; rotation_only; source_optical_center_preserved",
+  "virtual_valid_fraction_first_frame": 1.0,
+  "pose_frame": "virtual_camera",
+  "pose_local_file": "poses_local_virtual_camera.npy",
+  "evaluation_pose_file": "poses_local_virtual_camera.npy",
+  "action_file": "actions_raw_9d.npy",
+  "action_normalization": "none",
+  "action_encoding": "translation3 + rot6d_column_based",
+  "pose_convention": "backward_framewise",
+  "action_encoder": "local_cosmos_compatible",
+  "T_source_virtual_optical": [
+    [
+      1.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      1.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      1.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "T_ego_virtual_camera_first": [
+    [
+      -0.001857738621323802,
+      -0.006481465496303557,
+      0.9999772290633026,
+      0.32740570620687076
+    ],
+    [
+      -0.9999659551005841,
+      0.008051860473360078,
+      -0.0018055292479645197,
+      0.05625519042175231
+    ],
+    [
+      -0.008039974425865529,
+      -0.9999465471170486,
+      -0.006496202950081846,
+      -0.07648721010425703
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "GT_roundtrip_max_translation_m": 8.459660976861468e-07,
+  "GT_roundtrip_max_rotation_deg": 0.01764078420230909,
+  "time_mode": "native",
+  "exact_gt_10hz": false,
+  "rgb_interpolation": "none",
+  "synthetic_rgb_frames": 0,
+  "synthetic_rgb_fraction": 0.0,
+  "timestamp_max_dt_error_s": 0.006558999999999843,
+  "source_time_brackets_file": "source_time_brackets_s.npy",
+  "source_interpolation_alpha_file": "source_interpolation_alpha.npy",
+  "note_rgb_time": "Original measured exposures",
+  "actual_capture_duration_s": 6.233134,
+  "actual_effective_fps": 9.625976274535411,
+  "clip_timebase": "nominal_10fps_native_timestamps",
+  "first_timestamp_s": 0.0,
+  "last_timestamp_s": 6.233134,
+  "video_path": "/mnt/ufs/users/jaeha-lee/share/jiiyoung/cosmos3_ji/processed_virtual_native_v2/kitti/val/kitti_09_000000/video.mp4",
+  "source_frame_ids": [
+    "09/000000.png",
+    "09/000001.png",
+    "09/000002.png",
+    "09/000003.png",
+    "09/000004.png",
+    "09/000005.png",
+    "09/000006.png",
+    "09/000007.png",
+    "09/000008.png",
+    "09/000009.png",
+    "09/000010.png",
+    "09/000011.png",
+    "09/000012.png",
+    "09/000013.png",
+    "09/000014.png",
+    "09/000015.png",
+    "09/000016.png",
+    "09/000017.png",
+    "09/000018.png",
+    "09/000019.png",
+    "09/000020.png",
+    "09/000021.png",
+    "09/000022.png",
+    "09/000023.png",
+    "09/000024.png",
+    "09/000025.png",
+    "09/000026.png",
+    "09/000027.png",
+    "09/000028.png",
+    "09/000029.png",
+    "09/000030.png",
+    "09/000031.png",
+    "09/000032.png",
+    "09/000033.png",
+    "09/000034.png",
+    "09/000035.png",
+    "09/000036.png",
+    "09/000037.png",
+    "09/000038.png",
+    "09/000039.png",
+    "09/000040.png",
+    "09/000041.png",
+    "09/000042.png",
+    "09/000043.png",
+    "09/000044.png",
+    "09/000045.png",
+    "09/000046.png",
+    "09/000047.png",
+    "09/000048.png",
+    "09/000049.png",
+    "09/000050.png",
+    "09/000051.png",
+    "09/000052.png",
+    "09/000053.png",
+    "09/000054.png",
+    "09/000055.png",
+    "09/000056.png",
+    "09/000057.png",
+    "09/000058.png",
+    "09/000059.png",
+    "09/000060.png"
+  ]
+}

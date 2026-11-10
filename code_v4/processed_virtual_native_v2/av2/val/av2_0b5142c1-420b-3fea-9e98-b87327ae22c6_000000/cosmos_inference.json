@@ -1,0 +1,12 @@
+{
+  "name": "av2_0b5142c1-420b-3fea-9e98-b87327ae22c6_000000",
+  "model_mode": "inverse_dynamics",
+  "domain_name": "av",
+  "action_chunk_size": 60,
+  "fps": 10,
+  "image_size": 480,
+  "view_point": "ego_view",
+  "prompt": "You are an autonomous vehicle planning system.",
+  "vision_path": "/mnt/ufs/users/jaeha-lee/share/jiiyoung/cosmos3_ji/processed_virtual_native_v2/av2/val/av2_0b5142c1-420b-3fea-9e98-b87327ae22c6_000000/video.mp4",
+  "seed": 0
+}

@@ -1,0 +1,193 @@
+{
+  "format": "cosmos3_virtual_camera_v2",
+  "clip_id": "kitti_00_000120",
+  "dataset": "kitti",
+  "split": "train",
+  "sequence": "00",
+  "camera": "image_2",
+  "fps": 10,
+  "frame_count": 61,
+  "action_count": 60,
+  "video_codec": "h264",
+  "video_size_wh": [
+    640,
+    384
+  ],
+  "virtual_hfov_deg": 45.0,
+  "K_virtual": [
+    [
+      772.5483399593904,
+      0.0,
+      320.0
+    ],
+    [
+      0.0,
+      772.5483399593904,
+      192.0
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "K_video": [
+    [
+      772.5483399593904,
+      0.0,
+      320.0
+    ],
+    [
+      0.0,
+      772.5483399593904,
+      192.0
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "virtual_camera_definition": "optical +X right, +Y down, +Z forward; rotation_only; source_optical_center_preserved",
+  "virtual_valid_fraction_first_frame": 1.0,
+  "pose_frame": "virtual_camera",
+  "pose_local_file": "poses_local_virtual_camera.npy",
+  "evaluation_pose_file": "poses_local_virtual_camera.npy",
+  "action_file": "actions_raw_9d.npy",
+  "action_normalization": "none",
+  "action_encoding": "translation3 + rot6d_column_based",
+  "pose_convention": "backward_framewise",
+  "action_encoder": "local_cosmos_compatible",
+  "T_source_virtual_optical": [
+    [
+      1.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      1.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      1.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "T_ego_virtual_camera_first": [
+    [
+      0.00042767942773025994,
+      -0.007210626730323893,
+      0.9999739586828226,
+      0.287991266450401
+    ],
+    [
+      -0.9999672085151491,
+      0.008081198609158345,
+      0.00048594941967905817,
+      0.04853841031424216
+    ],
+    [
+      -0.008084491740438087,
+      -0.9999413812035542,
+      -0.007206934608082001,
+      -0.05685871881276498
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "GT_roundtrip_max_translation_m": 4.7160054370559107e-07,
+  "GT_roundtrip_max_rotation_deg": 0.019967402831630968,
+  "time_mode": "native",
+  "exact_gt_10hz": false,
+  "rgb_interpolation": "none",
+  "synthetic_rgb_frames": 0,
+  "synthetic_rgb_fraction": 0.0,
+  "timestamp_max_dt_error_s": 0.0037900000000000433,
+  "source_time_brackets_file": "source_time_brackets_s.npy",
+  "source_interpolation_alpha_file": "source_interpolation_alpha.npy",
+  "note_rgb_time": "Original measured exposures",
+  "actual_capture_duration_s": 6.219150000000001,
+  "actual_effective_fps": 9.647620655555823,
+  "clip_timebase": "nominal_10fps_native_timestamps",
+  "first_timestamp_s": 12.44411,
+  "last_timestamp_s": 18.66326,
+  "video_path": "/mnt/ufs/users/jaeha-lee/share/jiiyoung/cosmos3_ji/processed_virtual_native_v2/kitti/train/kitti_00_000120/video.mp4",
+  "source_frame_ids": [
+    "00/000120.png",
+    "00/000121.png",
+    "00/000122.png",
+    "00/000123.png",
+    "00/000124.png",
+    "00/000125.png",
+    "00/000126.png",
+    "00/000127.png",
+    "00/000128.png",
+    "00/000129.png",
+    "00/000130.png",
+    "00/000131.png",
+    "00/000132.png",
+    "00/000133.png",
+    "00/000134.png",
+    "00/000135.png",
+    "00/000136.png",
+    "00/000137.png",
+    "00/000138.png",
+    "00/000139.png",
+    "00/000140.png",
+    "00/000141.png",
+    "00/000142.png",
+    "00/000143.png",
+    "00/000144.png",
+    "00/000145.png",
+    "00/000146.png",
+    "00/000147.png",
+    "00/000148.png",
+    "00/000149.png",
+    "00/000150.png",
+    "00/000151.png",
+    "00/000152.png",
+    "00/000153.png",
+    "00/000154.png",
+    "00/000155.png",
+    "00/000156.png",
+    "00/000157.png",
+    "00/000158.png",
+    "00/000159.png",
+    "00/000160.png",
+    "00/000161.png",
+    "00/000162.png",
+    "00/000163.png",
+    "00/000164.png",
+    "00/000165.png",
+    "00/000166.png",
+    "00/000167.png",
+    "00/000168.png",
+    "00/000169.png",
+    "00/000170.png",
+    "00/000171.png",
+    "00/000172.png",
+    "00/000173.png",
+    "00/000174.png",
+    "00/000175.png",
+    "00/000176.png",
+    "00/000177.png",
+    "00/000178.png",
+    "00/000179.png",
+    "00/000180.png"
+  ]
+}

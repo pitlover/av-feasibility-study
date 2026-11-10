@@ -1,0 +1,193 @@
+{
+  "format": "cosmos3_virtual_camera_v2",
+  "clip_id": "av2_0b5142c1-420b-3fea-9e98-b87327ae22c6_000000",
+  "dataset": "av2",
+  "split": "val",
+  "sequence": "0b5142c1-420b-3fea-9e98-b87327ae22c6",
+  "camera": "stereo_front_left",
+  "fps": 10,
+  "frame_count": 61,
+  "action_count": 60,
+  "video_codec": "h264",
+  "video_size_wh": [
+    640,
+    384
+  ],
+  "virtual_hfov_deg": 45.0,
+  "K_virtual": [
+    [
+      772.5483399593904,
+      0.0,
+      320.0
+    ],
+    [
+      0.0,
+      772.5483399593904,
+      192.0
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "K_video": [
+    [
+      772.5483399593904,
+      0.0,
+      320.0
+    ],
+    [
+      0.0,
+      772.5483399593904,
+      192.0
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "virtual_camera_definition": "optical +X right, +Y down, +Z forward; rotation_only; source_optical_center_preserved",
+  "virtual_valid_fraction_first_frame": 1.0,
+  "pose_frame": "virtual_camera",
+  "pose_local_file": "poses_local_virtual_camera.npy",
+  "evaluation_pose_file": "poses_local_virtual_camera.npy",
+  "action_file": "actions_raw_9d.npy",
+  "action_normalization": "none",
+  "action_encoding": "translation3 + rot6d_column_based",
+  "pose_convention": "backward_framewise",
+  "action_encoder": "local_cosmos_compatible",
+  "T_source_virtual_optical": [
+    [
+      1.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      1.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      1.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "T_ego_virtual_camera_first": [
+    [
+      0.0015817814972655664,
+      0.005262786092790073,
+      0.9999849004109197,
+      1.6286119923835718
+    ],
+    [
+      -0.9998943511055007,
+      0.014457522114547622,
+      0.0015055502706688983,
+      0.25315798392973726
+    ],
+    [
+      -0.014449380422878133,
+      -0.9998816345632364,
+      0.0052850987262344495,
+      1.2360468715820618
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "GT_roundtrip_max_translation_m": 4.0945958145244413e-08,
+  "GT_roundtrip_max_rotation_deg": 1.7075472925031877e-06,
+  "time_mode": "native",
+  "exact_gt_10hz": false,
+  "rgb_interpolation": "none",
+  "synthetic_rgb_frames": 0,
+  "synthetic_rgb_fraction": 0.0,
+  "timestamp_max_dt_error_s": 3.576278687078549e-08,
+  "source_time_brackets_file": "source_time_brackets_s.npy",
+  "source_interpolation_alpha_file": "source_interpolation_alpha.npy",
+  "note_rgb_time": "Original measured exposures",
+  "actual_capture_duration_s": 6.0,
+  "actual_effective_fps": 10.0,
+  "clip_timebase": "nominal_10fps_native_timestamps",
+  "first_timestamp_s": 315968121.1999272,
+  "last_timestamp_s": 315968127.1999272,
+  "video_path": "/mnt/ufs/users/jaeha-lee/share/jiiyoung/cosmos3_ji/processed_virtual_native_v2/av2/val/av2_0b5142c1-420b-3fea-9e98-b87327ae22c6_000000/video.mp4",
+  "source_frame_ids": [
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968121199927209.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968121299927215.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968121399927211.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968121499927213.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968121599927221.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968121699927219.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968121799927216.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968121899927217.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968121999927213.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968122099927212.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968122199927216.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968122299927220.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968122399927220.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968122499927218.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968122599927218.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968122699927214.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968122799927210.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968122899927218.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968122999927218.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968123099927219.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968123199927216.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968123299927209.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968123399927214.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968123499927215.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968123599927216.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968123699927217.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968123799927219.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968123899927215.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968123999927217.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968124099927209.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968124199927219.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968124299927211.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968124399927217.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968124499927222.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968124599927219.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968124699927208.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968124799927213.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968124899927218.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968124999927215.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968125099927212.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968125199927209.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968125299927222.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968125399927219.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968125499927209.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968125599927213.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968125699927219.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968125799927215.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968125899927221.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968125999927217.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968126099927211.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968126199927211.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968126299927209.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968126399927218.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968126499927215.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968126599927216.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968126699927221.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968126799927214.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968126899927211.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968126999927212.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968127099927209.jpg",
+    "0b5142c1-420b-3fea-9e98-b87327ae22c6/stereo_front_left/315968127199927222.jpg"
+  ]
+}
