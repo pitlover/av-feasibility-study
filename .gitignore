@@ -218,3 +218,4 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+/code_v4/processed_virtual_native_v2/
