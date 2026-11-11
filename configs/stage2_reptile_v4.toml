@@ -26,7 +26,7 @@ seed = 42
 [train]
 gpus = 4
 max_iters = 3000
-save_every = 500
+save_every = 3000
 
 [optimizer]
 lr = 1e-5
