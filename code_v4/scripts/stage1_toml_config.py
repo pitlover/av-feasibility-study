@@ -19,12 +19,20 @@ from pathlib import Path
 SCHEMA = {
     "job.run_tag": ("RUN_TAG", str, "s1_full_raw_v1", "RUN_TAG"),
     "job.eval_tag": ("EVAL_TAG", str, "val_seed42_v1", "EVAL_TAG"),
+    # step executed by the no-argument entrypoints configs/scripts/run_stage1_*.sh (stage1_full_train_eval.sh takes
+    # the step on the command line and ignores this key); "config" only prints the resolved settings.
+    "job.run_step": ("RUN_STEP", str, "config", "RUN_STEP"),
     "paths.base": ("BASE", str, str(Path.cwd()), "BASE"),
     "paths.framework": ("FRAMEWORK", str, "", "FRAMEWORK"),
     "paths.processed": ("PROCESSED", str, "", "PROCESSED"),
     "paths.template_run": ("TEMPLATE_RUN", str, "", "TEMPLATE_RUN"),
     "paths.edge_dcp": ("EDGE_DCP", str, "", "EDGE_DCP"),
     "paths.wan_vae": ("WAN_VAE", str, "", "WAN_VAE"),
+    # output roots used by configs/scripts/run_stage1_*.sh (relative = under paths.base); the defaults reproduce the
+    # fixed layout of stage1_full_train_eval.sh: runs_stage1_full/<run_tag>, exports/, evaluation/.
+    "paths.runs_root": ("RUNS_ROOT", str, "runs_stage1_full", "RUNS_ROOT"),
+    "paths.exports_root": ("EXPORTS_ROOT", str, "exports", "EXPORTS_ROOT"),
+    "paths.evaluation_root": ("EVALUATION_ROOT", str, "evaluation", "EVALUATION_ROOT"),
     "data.epoch_clips": ("EPOCH_CLIPS", int, 12000, "EPOCH_CLIPS"),
     "data.seed": ("SEED", int, 42, "SEED"),
     "data.weights.kitti": ("KITTI_WEIGHT", float, 1., "KITTI_WEIGHT"),
@@ -69,6 +77,7 @@ SCHEMA = {
     "reptile.loss_mode": ("REPTILE_LOSS_MODE", str, "total", "REPTILE_LOSS_MODE"),
 }
 
+RUN_STEPS = ("config", "inspect", "plan", "train", "export", "prepare", "oracle", "infer", "score", "render", "evaluate", "all")
 REPTILE_EPISODE_MODES = ("per_dataset", "all_datasets", "mixed")
 REPTILE_DATASET_SCHEDULES = ("alternate", "random")
 REPTILE_LOSS_MODES = ("total", "action")
@@ -250,6 +259,11 @@ def read_config(path: str | None, overrides: list[str]) -> dict[str, object]:
         raise ValueError("job.run_tag must use only letters, digits, _ and -")
     if not re.fullmatch(r"[A-Za-z0-9_-]+", values["job.eval_tag"]):
         raise ValueError("job.eval_tag must use only letters, digits, _ and -")
+    if values["job.run_step"] not in RUN_STEPS:
+        raise ValueError(f"job.run_step must be one of {'/'.join(RUN_STEPS)}")
+    for k in ("paths.runs_root", "paths.exports_root", "paths.evaluation_root"):
+        if not values[k].strip() or values[k].strip() == "/":
+            raise ValueError(f"{k} must be a non-empty directory (relative to paths.base or absolute)")
     if values["reptile.enabled"]:
         validate_reptile(values)
     return values

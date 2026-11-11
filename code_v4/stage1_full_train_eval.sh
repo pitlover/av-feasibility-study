@@ -9,9 +9,12 @@ set -Eeuo pipefail
 #   bash stage1_full_train_eval.sh --toml configs/stage1_full.toml plan
 #   bash stage1_full_train_eval.sh train --toml configs/stage1_full.toml
 #   bash stage1_full_train_eval.sh --toml configs/stage1_full.toml train.max_iters=500 plan
+#   bash stage1_full_train_eval.sh --toml configs/stage1_reptile_v1.toml      # no step: [job] run_step of the TOML (default config)
 # Reptile meta-pretraining instead of joint SFT: a TOML with [reptile] enabled = true
 # (configs/stage1_reptile_v1.toml / stage1_reptile_v2.toml); same commands, same output layout
 # (train.max_iters then counts meta-iterations). See README_REPTILE.md.
+# No-argument entrypoints: configs/scripts/run_stage1_reptile_*.sh (one TOML each; the step comes from [job] run_step).
+# Output roots: [paths] runs_root / exports_root / evaluation_root (default runs_stage1_full, exports, evaluation under paths.base).
 # Priority: dotted CLI assignment > TOML > environment variables > defaults.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_HELPER="$SCRIPT_DIR/scripts/stage1_toml_config.py"
@@ -39,7 +42,7 @@ while (( $# )); do
     *) echo "[ERROR] Unknown argument: $1" >&2; exit 2;;
   esac
 done
-MODE="${MODE:-config}"
+# No step on the command line -> [job] run_step of the TOML (resolved below; the helper validates it).
 if [[ -n "$CONFIG_PATH" ]]; then
   CONFIG_PATH="$(python -c 'from pathlib import Path;import sys;print(Path(sys.argv[1]).expanduser().resolve())' "$CONFIG_PATH")"
 fi
@@ -55,6 +58,7 @@ while IFS= read -r -d '' key && IFS= read -r -d '' value; do
   printf -v "$key" '%s' "$value"
 done < "$CFG_OUT"
 rm -f "$CFG_OUT"
+MODE="${MODE:-$RUN_STEP}"
 
 # Paths in TOML may be relative to the project base.
 BASE="$(cd "$BASE" && pwd)"
@@ -67,7 +71,22 @@ for pathvar in FRAMEWORK PROCESSED TEMPLATE_RUN EDGE_DCP WAN_VAE EVAL_DIR_OVERRI
     printf -v "$pathvar" '%s' "$BASE/$pth"
   fi
 done
+# Output roots ([paths] runs_root / exports_root / evaluation_root): save destinations only; relative = under BASE.
+resolve_save_root(){
+  local value="$1"
+  [[ -n "$value" && "$value" != "/" ]] || { echo "[ERROR] Invalid save root: '$value'" >&2; exit 2; }
+  if [[ "$value" == /* ]]; then printf '%s\n' "${value%/}"
+  else printf '%s\n' "$BASE/${value%/}"; fi
+}
+RUNS_ROOT="$(resolve_save_root "$RUNS_ROOT")"
+EXPORTS_ROOT="$(resolve_save_root "$EXPORTS_ROOT")"
+EVALUATION_ROOT="$(resolve_save_root "$EVALUATION_ROOT")"
 if [[ "$MODE" == config ]]; then
+  echo "[OUTPUT] stage1_run=$RUNS_ROOT/$RUN_TAG"
+  echo "[OUTPUT] final_dcp=$RUNS_ROOT/$RUN_TAG/outputs/cosmos3_av_id/pretrain/$RUN_TAG/checkpoints/$(printf 'iter_%09d' "$MAX_ITERS")"
+  echo "[OUTPUT] export=$EXPORTS_ROOT/${RUN_TAG}_iter_${STEP}"
+  echo "[OUTPUT] eval_dir=${EVAL_DIR_OVERRIDE:-$EVALUATION_ROOT/stage1_${RUN_TAG}/kitti_waymo_${EVAL_TAG}}"
+  echo "[OUTPUT] pred_dir=${PRED_DIR_OVERRIDE:-$EVALUATION_ROOT/pred_${RUN_TAG}_iter_${STEP}_${EVAL_TAG}}"
   echo "[TOML] ${CONFIG_PATH:-<default/environment>}"
   cfg_cmd=(python "$CONFIG_HELPER" --format json)
   [[ -z "$CONFIG_PATH" ]] || cfg_cmd+=(--toml "$CONFIG_PATH")
@@ -75,14 +94,14 @@ if [[ "$MODE" == config ]]; then
   exit 0
 fi
 
-S1="$BASE/runs_stage1_full/$RUN_TAG"
+S1="$RUNS_ROOT/$RUN_TAG"
 S1_OUTPUT="$S1/outputs/cosmos3_av_id/pretrain/$RUN_TAG"
 S1_DCP="$S1_OUTPUT/checkpoints/$(printf 'iter_%09d' "$STEP")"
 S1_FINAL_DCP="$S1_OUTPUT/checkpoints/$(printf 'iter_%09d' "$MAX_ITERS")"
 S1_CFG="$S1_OUTPUT/config.yaml"
-MODEL="$BASE/exports/${RUN_TAG}_iter_${STEP}"
-EVAL="$BASE/evaluation/stage1_${RUN_TAG}/kitti_waymo_${EVAL_TAG}"
-PRED="$BASE/evaluation/pred_${RUN_TAG}_iter_${STEP}_${EVAL_TAG}"
+MODEL="$EXPORTS_ROOT/${RUN_TAG}_iter_${STEP}"
+EVAL="$EVALUATION_ROOT/stage1_${RUN_TAG}/kitti_waymo_${EVAL_TAG}"
+PRED="$EVALUATION_ROOT/pred_${RUN_TAG}_iter_${STEP}_${EVAL_TAG}"
 # Optional explicit evaluation/prediction paths (existing results, e.g. *_retry1).
 [[ -z "${EVAL_DIR_OVERRIDE:-}" ]] || EVAL="$EVAL_DIR_OVERRIDE"
 [[ -z "${PRED_DIR_OVERRIDE:-}" ]] || PRED="$PRED_DIR_OVERRIDE"
@@ -126,6 +145,7 @@ printf '[CONFIG] mode=%s run=%s iter=%s export_step=%s gpus=%s trainer=%s\n' "$M
 printf '[CONFIG] processed=%s eval=%s pred=%s eval_mode=%s\n' "$PROCESSED" "$EVAL" "$PRED" "$EVAL_MODE"
 printf '[CONFIG] source_toml=%s weights=kitti:%s,waymo:%s wandb=%s\n' \
   "${CONFIG_PATH:-none}" "$KITTI_WEIGHT" "$WAYMO_WEIGHT" "$WANDB_MODE"
+printf '[OUTPUT ROOTS] runs=%s exports=%s evaluation=%s\n' "$RUNS_ROOT" "$EXPORTS_ROOT" "$EVALUATION_ROOT"
 [[ "$TRAINER" != reptile ]] || printf '[CONFIG] reptile: mode=%s schedule=%s inner_steps=%s meta_lr=%s->x%s clips_per_rank=%s (max_iters = META-iterations)\n' \
   "$REPTILE_EPISODE_MODE" "$REPTILE_DATASET_SCHEDULE" "$REPTILE_INNER_STEPS" "$REPTILE_META_LR" "$REPTILE_META_LR_MIN_RATIO" "$REPTILE_CLIPS_PER_RANK"
 
@@ -253,6 +273,7 @@ export_model(){
   export COSMOS_AV_ACTION_NORMALIZER=""
   export BASE_CHECKPOINT_PATH="$EDGE_DCP"
   export WAN_VAE_PATH="$WAN_VAE"
+  mkdir -p "$(dirname "$MODEL")"
   echo "[EXPORT] $S1_DCP -> $MODEL"
   python -m cosmos3eval.cli export --framework-root "$FRAMEWORK" \
      --dcp "$S1_DCP" --config "$S1_CFG" --out "$MODEL" --execute 2>&1 | tee "$S1/export_iter_${STEP}.log"
@@ -419,5 +440,5 @@ case "$MODE" in
   render) render;;
   evaluate) evaluate_from_toml;;
   all) [[ "$EVAL_MODE" == full ]] || fail 'all requires eval.mode="full"'; inspect; plan; train; export_model; evaluate_from_toml;;
-  *) fail 'Usage: bash stage1_full_train_eval.sh [--toml FILE] inspect|config|plan|train|export|prepare|oracle|infer|score|render|evaluate|all [section.key=value]';;
+  *) fail "Unknown step '$MODE' (command line or [job] run_step). Usage: bash stage1_full_train_eval.sh [--toml FILE] inspect|config|plan|train|export|prepare|oracle|infer|score|render|evaluate|all [section.key=value]";;
 esac

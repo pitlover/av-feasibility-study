@@ -6,6 +6,7 @@
 #   bash stage1_full_train_eval.sh --toml configs/stage1_reptile_smoke.toml evaluate
 [job]
 run_tag = "s1_reptile_smoke_v1"
+run_step = "all"                     # configs/scripts/run_stage1_reptile_smoke.sh: inspect -> plan -> train -> export -> evaluate
 eval_tag = "smoke_seed42_v1"
 
 [paths]
@@ -24,7 +25,7 @@ kitti = 1.0
 waymo = 1.0
 
 [train]
-gpus = 4
+gpus = 2
 max_iters = 4                         # meta-iterations
 save_every = 2
 

@@ -178,3 +178,5 @@ Python TOML 파싱, Bash 문법 검사, 스텁 기반 `plan → train → export
 ## Stage1을 Reptile 메타 사전학습으로 대체하기
 
 `configs/stage1_reptile_v1.toml`(매 meta-iteration에 KITTI+Waymo 둘 다) / `configs/stage1_reptile_v3.toml` 등 `per_dataset` 변형(한 데이터셋씩; 전체 스윕 표는 `README_REPTILE.md`)을 같은 `stage1_full_train_eval.sh` 명령으로 실행하면 됩니다. 출력 구조는 동일하고 최종 DCP의 iter 번호만 `train.max_iters`(meta-iteration 수)로 바뀌므로, Stage2는 `configs/stage2_full.toml`의 `paths.stage1_run` / `paths.stage1_checkpoint` 두 줄만 바꿔 시작합니다. 자세한 내용은 `README_REPTILE.md`.
+
+인자 없이 실행하려면 `bash configs/scripts/run_stage1_reptile_v1.sh`(smoke/v1~v10 하나씩)를 쓰면 됩니다. 이 wrapper는 TOML의 `[job] run_step`(생략 시 `config`)을 단계로 삼아 `stage1_full_train_eval.sh --toml <TOML>`에 위임하므로 동작·검사·출력 경로가 위와 같습니다. 단계 인자를 생략한 `bash stage1_full_train_eval.sh --toml <TOML>`도 같은 `run_step`을 사용합니다.

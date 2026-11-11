@@ -100,7 +100,7 @@ class ReptileShellMockTests(unittest.TestCase):
 
             c = run('config')
             self.assertEqual(c.returncode, 0, c.stdout + c.stderr)
-            self.assertEqual(json.loads(c.stdout.split('\n', 1)[1])['reptile.inner_steps'], 3)
+            self.assertEqual(json.loads(c.stdout[c.stdout.index('{'):])['reptile.inner_steps'], 3)
 
             p = run('plan')
             self.assertEqual(p.returncode, 0, p.stdout + '\n' + p.stderr)

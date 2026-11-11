@@ -78,6 +78,8 @@ bash stage1_full_train_eval.sh --toml "$S1_CONFIG" export
 bash stage1_full_train_eval.sh --toml "$S1_CONFIG" evaluate
 ```
 
+인자 없는 실행 (`configs/scripts/run_stage1_reptile_<smoke|v1..v10>.sh`): 각 파일은 자기 TOML 하나만 가리키는 얇은 wrapper이고, 단계는 TOML의 `[job] run_step`(`config|inspect|plan|train|export|prepare|oracle|infer|score|render|evaluate|all`, 생략 시 `config` = 설정 출력만)에서 읽어 `stage1_full_train_eval.sh --toml <그 TOML>`에 그대로 위임합니다. 프로젝트 루트에서 `bash configs/scripts/run_stage1_reptile_v1.sh`처럼 실행하면 되고(파일을 루트로 복사해도 동작), 검사·출력 구조·Reptile 라우팅은 위 명령과 완전히 같습니다. smoke TOML은 `run_step = "all"`이라 한 번에 plan→train→export→evaluate를 돕니다. 출력 루트를 옮기고 싶으면 `[paths] runs_root / exports_root / evaluation_root`(기본 `runs_stage1_full`, `exports`, `evaluation`; 상대 경로는 `paths.base` 아래)를 지정합니다.
+
 출력 경로는 기존 규칙 그대로이고, `<tag>` = 그 TOML의 `job.run_tag`, `<N>` = `train.max_iters`(meta-iteration 수; 기준선의 3000과 다릅니다). v1이면 `<tag>` = `s1_reptile_v1`, `<N>` = 1000:
 
 | | 경로 |
