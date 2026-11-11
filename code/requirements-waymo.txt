@@ -1,7 +1,0 @@
-# Use a separate environment with Waymo dataset_pb2 available.
-# On the user's tested environment, the Waymo TF 2.12 wheel was used:
-# tensorflow==2.12.0
-# waymo-open-dataset-tf-2-12-0
-numpy>=1.23
-opencv-python-headless>=4.8
-scipy>=1.10

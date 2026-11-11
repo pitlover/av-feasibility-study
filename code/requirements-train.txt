@@ -1,5 +1,0 @@
-numpy>=1.24
-scipy>=1.10
-opencv-python-headless>=4.8
-Pillow>=9
-# Install torch and torchvision appropriate for your CUDA environment separately.

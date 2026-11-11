@@ -1,3 +1,0 @@
-numpy>=1.26
-# In the NVIDIA Cosmos Framework training environment also install its official training extras,
-# torch, opencv-python-headless, CUDA-matching dependencies and FFmpeg.
