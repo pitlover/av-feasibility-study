@@ -14,7 +14,7 @@ set -Eeuo pipefail
 # (configs/stage1_reptile_v1.toml / stage1_reptile_v2.toml); same commands, same output layout
 # (train.max_iters then counts meta-iterations). See README_REPTILE.md.
 # No-argument entrypoints: configs/scripts/run_stage1_reptile_*.sh (one TOML each; the step comes from [job] run_step).
-# Output roots: [paths] runs_root / exports_root / evaluation_root (default runs_stage1_full, exports, evaluation under paths.base).
+# Output roots: [paths] run_root / exports_root / evaluation_root (default runs_stage1_full, exports, evaluation under paths.base).
 # Priority: dotted CLI assignment > TOML > environment variables > defaults.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_HELPER="$SCRIPT_DIR/scripts/stage1_toml_config.py"
@@ -71,7 +71,7 @@ for pathvar in FRAMEWORK PROCESSED TEMPLATE_RUN EDGE_DCP WAN_VAE EVAL_DIR_OVERRI
     printf -v "$pathvar" '%s' "$BASE/$pth"
   fi
 done
-# Output roots ([paths] runs_root / exports_root / evaluation_root): save destinations only; relative = under BASE.
+# Output roots ([paths] run_root / exports_root / evaluation_root): save destinations only; relative = under BASE.
 resolve_save_root(){
   local value="$1"
   [[ -n "$value" && "$value" != "/" ]] || { echo "[ERROR] Invalid save root: '$value'" >&2; exit 2; }

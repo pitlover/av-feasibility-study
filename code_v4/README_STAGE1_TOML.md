@@ -48,7 +48,7 @@ With `enabled=false`, the mode must be `disabled`. `online` requires `pip instal
 
 - `job.run_tag`, `job.eval_tag`, `job.run_step` (step used when none is given on the command line, e.g. by the no-argument entrypoints `configs/scripts/run_stage1_reptile_*.sh`; default `config`)
 - `paths.base`, `paths.framework`, `paths.processed`, `paths.template_run`, `paths.edge_dcp`, `paths.wan_vae`
-- `paths.runs_root`, `paths.exports_root`, `paths.evaluation_root` (save destinations; relative = under `paths.base`; defaults `runs_stage1_full`, `exports`, `evaluation` = the unchanged layout)
+- `paths.run_root`, `paths.exports_root`, `paths.evaluation_root` (save destinations; relative = under `paths.base`; defaults `runs_stage1_full`, `exports`, `evaluation` = the unchanged layout)
 - `data.epoch_clips`, `data.seed`, `data.weights.kitti`, `data.weights.waymo`
 - `train.gpus`, `train.max_iters`, `train.save_every`
 - `optimizer.lr`

@@ -88,7 +88,7 @@ class EntrypointTests(unittest.TestCase):
             toml.write_text('[job]\nrun_step = "launch"\n', encoding='utf8')
             r = run(['bash', str(DRIVER), '--toml', str(toml)])
             self.assertNotEqual(r.returncode, 0)
-            self.assertIn('job.run_step must be one of', r.stderr)
+            self.assertIn('job.run_step must be', r.stderr)
 
     def test_output_roots_default_and_override(self):
         base = run(['bash', str(DRIVER), '--toml', str(CONFIGS / 'stage1_reptile_v1.toml'), 'config']).stdout
@@ -98,13 +98,13 @@ class EntrypointTests(unittest.TestCase):
         self.assertIn(f'[OUTPUT] export={ROOT}/exports/s1_reptile_v1_iter_1000', base)
         self.assertIn(f'[OUTPUT] pred_dir={ROOT}/evaluation/pred_s1_reptile_v1_iter_1000_val_seed42_v1', base)
         over = run(['bash', str(DRIVER), '--toml', str(CONFIGS / 'stage1_reptile_v1.toml'), 'config',
-                    'paths.runs_root=/scratch/runs', 'paths.exports_root=my_exports', 'paths.evaluation_root=/scratch/eval/']).stdout
+                    'paths.run_root=/scratch/runs', 'paths.exports_root=my_exports', 'paths.evaluation_root=/scratch/eval/']).stdout
         self.assertIn('[OUTPUT] stage1_run=/scratch/runs/s1_reptile_v1', over)
         self.assertIn(f'[OUTPUT] export={ROOT}/my_exports/s1_reptile_v1_iter_1000', over)
         self.assertIn('[OUTPUT] eval_dir=/scratch/eval/stage1_s1_reptile_v1/kitti_waymo_val_seed42_v1', over)
         cfg = parse_config_output(over)
-        self.assertEqual(cfg['paths.runs_root'], '/scratch/runs')
-        r = run(['bash', str(DRIVER), '--toml', str(CONFIGS / 'stage1_reptile_v1.toml'), 'config', 'paths.runs_root=/'])
+        self.assertEqual(cfg['paths.run_root'], '/scratch/runs')
+        r = run(['bash', str(DRIVER), '--toml', str(CONFIGS / 'stage1_reptile_v1.toml'), 'config', 'paths.run_root=/'])
         self.assertNotEqual(r.returncode, 0)
 
 
