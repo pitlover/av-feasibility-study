@@ -1,0 +1,54 @@
+# Stage2 (AV2 post-training) initialized from the Stage1 Reptile run of configs/stage1_reptile_v7.toml
+#   Stage1: run_tag=s1_reptile_v7, train.max_iters=500 -> final DCP iter_000000500
+#   Everything else is identical to configs/stage2_full.toml (camera-relative raw 9D, 3000 iters, lr 1e-5).
+# One-line run (step = [job] run_step): bash configs/scripts/run_stage2_reptile_v7.sh
+# Outputs: runs_stage2/s2_av2_reptile_v7/, exports/s2_av2_reptile_v7_iter_3000/, evaluation/pred_s2_av2_reptile_v7_iter_3000_val_seed42_v1/
+[job]
+run_step = "all"   # config | inspect | plan | train | export | evaluate | all
+run_tag = "s2_av2_reptile_v7"          # independent Stage2 run name (unique per Stage1 run)
+eval_tag = "val_seed42_v1"
+
+[paths]
+run_root = "runs_stage2"
+exports_root = "exports"
+evaluation_root = "evaluation"
+base = "."
+processed = "processed_virtual_native_v2"
+framework = "cosmos-framework"
+stage1_run = "runs_stage1_full/s1_reptile_v7"
+stage1_checkpoint = "runs_stage1_full/s1_reptile_v7/outputs/cosmos3_av_id/pretrain/s1_reptile_v7/checkpoints/iter_000000500"
+wan_vae = "/mnt/ufs/users/jiyoung-kim/project/backend/cosmos/cookbooks/cosmos3/generator/action/finetune/checkpoints/wan22_vae/Wan2.2_VAE.pth"
+
+[data]
+epoch_clips = 12000
+seed = 42
+
+[train]
+gpus = 4
+max_iters = 3000
+save_every = 500
+
+[optimizer]
+lr = 1e-5
+
+[wandb]
+enabled = false
+mode = "disabled"                   # disabled | offline | online
+project = "cosmos3_av_id"
+
+[export]
+step = 0                            # 0 -> train.max_iters
+
+[eval]
+mode = "full"                       # full (infer+score+render) | score | render | both
+clips_per_dataset = 20
+infer_gpus = 1
+eval_dir = ""                      # optional existing EVAL directory
+pred_dir = ""                      # optional existing PRED directory (retry1 etc.)
+render_enabled = true
+render_max_clips = 3               # AV2 3 scenes
+render_clip_ids = []
+ground_height_m = 1.7
+horizon_steps = 60
+fps = 10
+layout = "both"
