@@ -1,0 +1,59 @@
+# Stage2 BASELINE without Stage1: Cosmos3-Edge DCP -> AV2 post-training (camera-relative raw 9D).
+#   Comparison point for the Stage1 (joint / Reptile) -> Stage2 runs; every other setting equals
+#   configs/stage2_full.toml (3000 iters, lr 1e-5, same AV2 val selection seed) so metrics are comparable.
+# One-line run (step = [job] run_step): bash configs/scripts/run_stage2_baseline_v1.sh
+#   plan/train/export run in that script (no Stage1 lineage to check); inspect/evaluate are delegated to
+#   stage2_full_train_eval.sh, which therefore requires the default output roots below.
+# Outputs: runs_stage2/s2_av2_edge_baseline_v1/, exports/s2_av2_edge_baseline_v1_iter_3000/,
+#          evaluation/pred_s2_av2_edge_baseline_v1_iter_3000_val_seed42_v1/
+[job]
+run_step = "all"   # config | inspect | plan | train | export | evaluate | all
+run_tag = "s2_av2_edge_baseline_v1"   # independent Stage2 run name (no Stage1)
+eval_tag = "val_seed42_v1"
+
+[paths]
+run_root = "runs_stage2"
+exports_root = "exports"
+evaluation_root = "evaluation"
+base = "."
+processed = "processed_virtual_native_v2"
+framework = "cosmos-framework"
+stage1_run = ""                    # MUST stay empty: marks this as the no-Stage1 baseline
+# Baseline: this key holds the Stage2 INIT checkpoint = the original Cosmos3-Edge DCP (same as Stage1 edge_dcp).
+# (The strict Stage2 parser accepts no new keys, so the existing key is reused.)
+stage1_checkpoint = "/mnt/ufs/users/jiyoung-kim/project/backend/cosmos/cookbooks/cosmos3/generator/action/finetune/checkpoints/Cosmos3-Edge"
+wan_vae = "/mnt/ufs/users/jiyoung-kim/project/backend/cosmos/cookbooks/cosmos3/generator/action/finetune/checkpoints/wan22_vae/Wan2.2_VAE.pth"
+
+[data]
+epoch_clips = 12000
+seed = 42
+
+[train]
+gpus = 4
+max_iters = 3000
+save_every = 3000
+
+[optimizer]
+lr = 1e-5
+
+[wandb]
+enabled = false
+mode = "disabled"                   # disabled | offline | online
+project = "cosmos3_av_id"
+
+[export]
+step = 0                            # 0 -> train.max_iters
+
+[eval]
+mode = "full"                       # full (infer+score+render) | score | render | both
+clips_per_dataset = 20
+infer_gpus = 1
+eval_dir = ""                      # optional existing EVAL directory
+pred_dir = ""                      # optional existing PRED directory (retry1 etc.)
+render_enabled = true
+render_max_clips = 3               # AV2 3 scenes
+render_clip_ids = []
+ground_height_m = 1.7
+horizon_steps = 60
+fps = 10
+layout = "both"
