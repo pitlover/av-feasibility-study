@@ -19,6 +19,10 @@ from pathlib import Path
 SCHEMA = {
     "job.run_tag": ("RUN_TAG", str, "s1_full_raw_v1", "RUN_TAG"),
     "job.eval_tag": ("EVAL_TAG", str, "val_seed42_v1", "EVAL_TAG"),
+    "job.run_step": ("RUN_STEP", str, "config", "RUN_STEP"),
+    "paths.run_root": ("RUNS_ROOT", str, "runs_stage1_full", "RUNS_ROOT"),
+    "paths.exports_root": ("EXPORTS_ROOT", str, "exports", "EXPORTS_ROOT"),
+    "paths.evaluation_root": ("EVALUATION_ROOT", str, "evaluation", "EVALUATION_ROOT"),
     "paths.base": ("BASE", str, str(Path.cwd()), "BASE"),
     "paths.framework": ("FRAMEWORK", str, "", "FRAMEWORK"),
     "paths.processed": ("PROCESSED", str, "", "PROCESSED"),
@@ -199,8 +203,6 @@ def read_config(path: str | None, overrides: list[str]) -> dict[str, object]:
     values: dict[str, object] = {}
     for k, (env_name, typ, default, fallback_env) in SCHEMA.items():
         raw = default
-        if fallback_env in os.environ and os.environ[fallback_env] != "":
-            raw = os.environ[fallback_env]
         if k in parsed:
             raw = parsed[k]
         if k in cli:
@@ -246,6 +248,12 @@ def read_config(path: str | None, overrides: list[str]) -> dict[str, object]:
         raise ValueError("eval.fps must be positive")
     if not values["wandb.project"].strip():
         raise ValueError("wandb.project must not be blank")
+    if values["job.run_step"] not in {"config","inspect","plan","train","export","prepare","oracle","infer","score","render","evaluate","all"}:
+        raise ValueError("job.run_step must be config/inspect/plan/train/export/evaluate/all etc")
+    for key in ("paths.run_root", "paths.exports_root", "paths.evaluation_root"):
+        path = values[key]
+        if not path.strip() or path.strip() in {"/", ".", ".."} or ".." in Path(path).parts:
+            raise ValueError(f"Unsafe output root: {key}={path!r}")
     if not re.fullmatch(r"[A-Za-z0-9_-]+", values["job.run_tag"]):
         raise ValueError("job.run_tag must use only letters, digits, _ and -")
     if not re.fullmatch(r"[A-Za-z0-9_-]+", values["job.eval_tag"]):

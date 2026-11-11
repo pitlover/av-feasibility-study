@@ -19,6 +19,10 @@ import tomllib
 SCHEMA = {
     'job.run_tag': ('RUN_TAG', str, 's2_av2_baseline_v1'),
     'job.eval_tag': ('EVAL_TAG', str, 'val_seed42_v1'),
+    'job.run_step': ('RUN_STEP', str, 'config'),
+    'paths.run_root': ('RUNS_ROOT', str, 'runs_stage2'),
+    'paths.exports_root': ('EXPORTS_ROOT', str, 'exports'),
+    'paths.evaluation_root': ('EVALUATION_ROOT', str, 'evaluation'),
     'paths.base': ('BASE', str, str(Path.cwd())),
     'paths.processed': ('PROCESSED', str, 'processed_virtual_native_v2'),
     'paths.framework': ('FRAMEWORK', str, 'cosmos-framework'),
@@ -127,7 +131,7 @@ def resolve(path: str | None, overrides: list[str]) -> dict:
     cli = dict(read_override(x) for x in overrides)
     values = {}
     for key, (env, typ, default) in SCHEMA.items():
-        raw = os.environ.get(env, '') or default
+        raw = default
         raw = parsed.get(key, raw)
         raw = cli.get(key, raw)
         values[key] = coerce(key, raw)
@@ -160,6 +164,12 @@ def resolve(path: str | None, overrides: list[str]) -> dict:
         raise ValueError('eval.mode must be one of full/score/render/both')
     if not values['wandb.project'].strip():
         raise ValueError('wandb.project must not be blank')
+    if values['job.run_step'] not in {'config','inspect','plan','train','export','prepare','oracle','infer','score','render','evaluate','all'}:
+        raise ValueError('job.run_step is invalid')
+    for key in ('paths.run_root','paths.exports_root','paths.evaluation_root'):
+        path = values[key]
+        if not path.strip() or path.strip() in {'/', '.', '..'} or '..' in Path(path).parts:
+            raise ValueError(f'Unsafe output root: {key}={path!r}')
     for key in ('job.run_tag','job.eval_tag'):
         if not re.fullmatch(r'[A-Za-z0-9_-]+', values[key]):
             raise ValueError(f'{key} allows only letters/numbers/_/-')
