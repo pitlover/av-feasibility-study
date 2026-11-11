@@ -11,6 +11,7 @@
 [job]
 run_tag = "s1_reptile_v8"                # New unique run (must differ between TOMLs); do not overwrite past training
 eval_tag = "val_seed42_v1"
+run_step = "all"
 
 [paths]
 base = "."
