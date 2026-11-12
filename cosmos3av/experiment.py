@@ -1,3 +1,4 @@
+# STAGE1_MULTISOURCE_FPS_V1 (local patch; no remote writes)
 """Cosmos3-Edge AV inverse-dynamics SFT for cosmos-framework revision 98c35eda.
 
 Export reads policy metadata from
@@ -16,6 +17,8 @@ import copy
 
 EXPERIMENT_NAME = "action_inverse_dynamics_av_edge"
 AV_ACTION_STEPS = 60
+# A constant 10 is retained only as the policy/export schema's nominal FPS.
+# Actual 10/12/20Hz timing is supplied by each raw clip's conditioning_fps.
 AV_FPS = 10
 AV_DOMAIN = "av"
 
@@ -40,7 +43,7 @@ def get_av_dataset_with_policy_metadata(
     """
     if chunk_length != AV_ACTION_STEPS or fps != AV_FPS or embodiment_type != AV_DOMAIN:
         raise ValueError(
-            "AV dataset contract is 61 video frames / 60 actions / 10 fps / domain 'av'; "
+            "AV dataset contract is 61 video frames / 60 actions / clip-specific 10/12/20 fps / domain 'av'; "
             f"got chunk_length={chunk_length}, fps={fps}, embodiment_type={embodiment_type}"
         )
     from .framework_dataset import get_action_av_sft_dataset

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# STAGE1_MULTISOURCE_FPS_V1 (local patch; no remote writes)
 """Resolve a safe Stage1 TOML into NUL-delimited environment assignments.
 
 Precedence: CLI dotted assignments > TOML > existing ENV > defaults.
@@ -29,10 +30,17 @@ SCHEMA = {
     "paths.template_run": ("TEMPLATE_RUN", str, "", "TEMPLATE_RUN"),
     "paths.edge_dcp": ("EDGE_DCP", str, "", "EDGE_DCP"),
     "paths.wan_vae": ("WAN_VAE", str, "", "WAN_VAE"),
+    "data.datasets": ("DATASETS_JSON", list, ["kitti", "waymo"], "DATASETS_JSON"),
+    "data.sources.kitti": ("SOURCE_KITTI", str, "", "SOURCE_KITTI"),
+    "data.sources.waymo": ("SOURCE_WAYMO", str, "", "SOURCE_WAYMO"),
+    "data.sources.av2": ("SOURCE_AV2", str, "", "SOURCE_AV2"),
+    "data.sources.nuscenes": ("SOURCE_NUSCENES", str, "", "SOURCE_NUSCENES"),
     "data.epoch_clips": ("EPOCH_CLIPS", int, 12000, "EPOCH_CLIPS"),
     "data.seed": ("SEED", int, 42, "SEED"),
     "data.weights.kitti": ("KITTI_WEIGHT", float, 1., "KITTI_WEIGHT"),
     "data.weights.waymo": ("WAYMO_WEIGHT", float, 1., "WAYMO_WEIGHT"),
+    "data.weights.av2": ("AV2_WEIGHT", float, 1., "AV2_WEIGHT"),
+    "data.weights.nuscenes": ("NUSCENES_WEIGHT", float, 1., "NUSCENES_WEIGHT"),
     "train.gpus": ("GPUS", int, 4, "GPUS"),
     "train.max_iters": ("MAX_ITERS", int, 3000, "MAX_ITERS"),
     "train.save_every": ("SAVE_EVERY", int, 500, "SAVE_EVERY"),
@@ -108,8 +116,9 @@ def validate_reptile(values: dict[str, object]) -> None:
     if values["reptile.support_clips"] and values["reptile.support_clips"] < min_support:
         raise ValueError(f"reptile.support_clips must be 0 (fresh clips every step) or >= train.gpus * clips_per_rank = {min_support}")
     if values["reptile.episode_mode"] == "per_dataset" and values["reptile.dataset_schedule"] == "alternate":
-        if abs(values["data.weights.kitti"] - values["data.weights.waymo"]) > 1e-9:
-            raise ValueError("reptile.dataset_schedule='alternate' visits both datasets equally; use equal data.weights or dataset_schedule='random'")
+        selected_weights = [values[f"data.weights.{ds}"] for ds in values["data.datasets"]]
+        if max(selected_weights) - min(selected_weights) > 1e-9:
+            raise ValueError("reptile.dataset_schedule='alternate' visits all selected datasets equally; use equal weights or dataset_schedule='random'")
 
 
 def reptile_json(values: dict[str, object]) -> dict[str, object]:
@@ -231,9 +240,14 @@ def read_config(path: str | None, overrides: list[str]) -> dict[str, object]:
         raise ValueError("train.max_iters must be divisible by train.save_every to save final checkpoint")
     if values["optimizer.lr"] <= 0:
         raise ValueError("optimizer.lr must be positive")
-    for k in ("data.weights.kitti", "data.weights.waymo"):
-        if values[k] <= 0:
-            raise ValueError(f"{k} must be positive")
+    selected_datasets = values["data.datasets"]
+    available = {"kitti", "waymo", "av2", "nuscenes"}
+    if not selected_datasets or len(set(selected_datasets)) != len(selected_datasets) or set(selected_datasets) - available:
+        raise ValueError(f"data.datasets must be a unique nonempty subset of {sorted(available)}")
+    for ds in selected_datasets:
+        key = f"data.weights.{ds}"
+        if values[key] <= 0:
+            raise ValueError(f"{key} must be positive")
     if values["export.step"] < 0:
         raise ValueError("export.step cannot be negative")
     if values["export.step"] == 0:
@@ -244,8 +258,8 @@ def read_config(path: str | None, overrides: list[str]) -> dict[str, object]:
         raise ValueError("eval.mode must be score/render/both/full")
     if values["eval.layout"] not in {"both", "bev", "projected"}:
         raise ValueError("eval.layout must be one of both/bev/projected")
-    if values["eval.fps"] <= 0:
-        raise ValueError("eval.fps must be positive")
+    if values["eval.fps"] < 0:
+        raise ValueError("eval.fps must be >= 0 (0 = auto)")
     if not values["wandb.project"].strip():
         raise ValueError("wandb.project must not be blank")
     if values["job.run_step"] not in {"config","inspect","plan","train","export","prepare","oracle","infer","score","render","evaluate","all"}:
@@ -266,7 +280,7 @@ def read_config(path: str | None, overrides: list[str]) -> dict[str, object]:
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--toml", default=None)
-    ap.add_argument("--format", choices=["env0", "json", "reptile-json"], default="env0",
+    ap.add_argument("--format", choices=["env0", "json", "reptile-json", "source-json"], default="env0",
                     help="env0: NUL-delimited env assignments; json: every resolved key; "
                          "reptile-json: the [reptile] table for cosmos3av.cli plan --reptile-config")
     ap.add_argument("overrides", nargs="*")
@@ -275,13 +289,21 @@ def main(argv=None):
         values = read_config(args.toml, args.overrides)
         if args.format == "reptile-json":
             payload = reptile_json(values)
+        elif args.format == "source-json":
+            payload = {
+                "base": values["paths.base"],
+                "processed": values["paths.processed"] or "processed_virtual_native_v2",
+                "datasets": list(values["data.datasets"]),
+                "sources": {ds: values[f"data.sources.{ds}"] for ds in values["data.datasets"]},
+                "weights": {ds: values[f"data.weights.{ds}"] for ds in values["data.datasets"]},
+            }
     except (OSError, ValueError, tomllib.TOMLDecodeError) as ex:
         print(f"[TOML ERROR] {ex}", file=sys.stderr)
         return 2
     if args.format == "json":
         json.dump(values, sys.stdout, indent=2, ensure_ascii=False)
         sys.stdout.write("\n")
-    elif args.format == "reptile-json":
+    elif args.format in ("reptile-json", "source-json"):
         json.dump(payload, sys.stdout, indent=2, ensure_ascii=False)
         sys.stdout.write("\n")
     else:

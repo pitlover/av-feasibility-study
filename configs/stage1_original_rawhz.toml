@@ -1,0 +1,62 @@
+# Stage-1 joint SFT: mixed clip FPS supported (10/12/20 as recorded in metadata).
+# `config` prints selected sources without running training.
+# Requires local installation: python apply_stage1_multisource.py --repo-root . --apply
+# The output dataset path may be a parent of its ablation subfolder; it is auto-detected.
+[job]
+run_step = "config"  # recommended: inspect -> plan -> train -> export -> evaluate
+run_tag = "s1_original_rawhz_4datasets"
+eval_tag = "val_seed42_v1"
+
+[paths]
+base = "."
+processed = "/mnt/ufs/users/jaeha-lee/share/jiiyoung/cosmos3_ji/processed_raw_rawhz"
+run_root = "runs_stage1_full"
+exports_root = "exports"
+evaluation_root = "evaluation"
+framework = "cosmos-framework"
+edge_dcp = "/mnt/ufs/users/jiyoung-kim/project/backend/cosmos/cookbooks/cosmos3/generator/action/finetune/checkpoints/Cosmos3-Edge"
+wan_vae = "/mnt/ufs/users/jiyoung-kim/project/backend/cosmos/cookbooks/cosmos3/generator/action/finetune/checkpoints/wan22_vae/Wan2.2_VAE.pth"
+
+[data]
+datasets = ["kitti", "waymo", "av2", "nuscenes"]
+epoch_clips = 12000
+seed = 42
+
+[data.weights]
+kitti = 1.0
+waymo = 1.0
+av2 = 1.0
+nuscenes = 1.0
+
+[data.sources]
+# Override only datasets whose source differs from paths.processed.
+
+[train]
+gpus = 4
+max_iters = 3000
+save_every = 500
+
+[optimizer]
+lr = 1e-5
+
+[wandb]
+enabled = false
+mode = "disabled"
+project = "cosmos3_av_id"
+
+[export]
+step = 0
+
+[eval]
+mode = "full"
+clips_per_dataset = 20
+infer_gpus = 1
+eval_dir = ""
+pred_dir = ""
+render_enabled = false # native raw-camera renders are experimental; enable explicitly
+render_max_clips = 3
+render_clip_ids = []
+ground_height_m = 1.7
+horizon_steps = 60
+fps = 0.0 # 0 = each clip's own acquisition FPS for rendered qualitative videos
+layout = "both"
