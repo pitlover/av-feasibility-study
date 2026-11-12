@@ -19,13 +19,16 @@ wan_vae = "/mnt/ufs/users/jiyoung-kim/project/backend/cosmos/cookbooks/cosmos3/g
 
 [data]
 datasets = ["kitti", "waymo", "av2"]
-epoch_clips = 12000
+epoch_clips = 3984
 seed = 42
 
 [data.weights]
-kitti = 1.0
-waymo = 1.0
-av2 = 1.0
+# kitti = 1.0
+# waymo = 1.0
+# av2 = 1.0
+kitti = 336.0
+waymo = 2297.0
+av2 = 1351.0
 
 [data.sources]
 # Override only datasets whose source differs from paths.processed.
