@@ -43,7 +43,7 @@ lr = 1e-5
 
 [wandb]
 enabled = false
-mode = "offline"
+mode = "disabled"
 project = "cosmos3_av_id"
 
 [reptile]
