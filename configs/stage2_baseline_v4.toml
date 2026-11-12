@@ -8,7 +8,7 @@
 #          evaluation/pred_s2_av2_edge_baseline_v1_iter_3000_val_seed42_v1/
 [job]
 run_step = "all"   # config | inspect | plan | train | export | evaluate | all
-run_tag = "s2_av2_edge_baseline_v2"   # independent Stage2 run name (no Stage1)
+run_tag = "s2_av2_edge_baseline_v4"   # independent Stage2 run name (no Stage1)
 eval_tag = "val_seed42_v1"
 
 [paths]
