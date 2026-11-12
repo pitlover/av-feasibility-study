@@ -338,17 +338,70 @@ maybe_render(){
   else echo '[RENDER SKIPPED] eval.render_enabled=false (run the render command to render separately)'; fi
 }
 
-# TOML controls the action for the *evaluate* command.
-# Existing-prediction modes never invoke inference or change checkpoints.
+
+# Remove optional generated prediction videos after successful evaluation.
+# Never delete source dataset videos or qualitative render outputs.
+cleanup_prediction_videos(){
+  # Ensure scoring has completed successfully.
+  if [[ ! -s "$PRED/metrics/summary.json" ]]; then
+    echo "[VIDEO CLEANUP SKIPPED] Metrics are not complete"
+    return 0
+  fi
+
+  # Safety: only operate inside this project's evaluation directory.
+  local pred_abs eval_root
+  pred_abs="$(realpath -e "$PRED")" || return 1
+  eval_root="$(realpath -e "$EVALUATION_ROOT")" || return 1
+
+  case "$pred_abs" in
+    "$eval_root"/pred_*) ;;
+    *)
+      echo "[VIDEO CLEANUP SKIPPED] Unsafe path: $pred_abs"
+      return 0
+      ;;
+  esac
+
+  echo "[VIDEO CLEANUP] Removing generated prediction videos"
+
+  find "$pred_abs" \
+    -mindepth 2 -maxdepth 2 \
+    -type f \
+    \( -name 'video.mp4' -o -name 'vision.mp4' \) \
+    -print -delete
+
+  echo "[VIDEO CLEANUP OK]"
+}
+
+
+
 evaluate_from_toml(){
   case "$EVAL_MODE" in
-    score) score ;;
-    render) render ;;
-    both) score; render ;;
-    full) prepare_eval; oracle; infer; score; maybe_render ;;
-    *) fail "Unsupported eval.mode: $EVAL_MODE" ;;
+    score)
+      score
+      ;;
+    render)
+      render
+      ;;
+    both)
+      score
+      render
+      ;;
+    full)
+      prepare_eval
+      oracle
+      infer
+      score
+      maybe_render
+      ;;
+    *)
+      fail "Unsupported eval.mode: $EVAL_MODE"
+      ;;
   esac
+
+  # Run only after all requested evaluation steps succeed.
+  cleanup_prediction_videos
 }
+
 
 case "$MODE" in
   inspect) inspect;;
