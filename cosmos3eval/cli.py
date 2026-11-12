@@ -1,3 +1,4 @@
+# STAGE1_MULTISOURCE_FPS_V1 (local patch; no remote writes)
 """Cosmos3-Edge AV evaluation CLI: prepare, export, infer, score, render, diagnose."""
 import argparse
 import json
@@ -118,7 +119,7 @@ def main(argv=None):
     sub=ap.add_subparsers(dest='command',required=True)
     p=sub.add_parser('prepare')
     p.add_argument('--processed-root',required=True);p.add_argument('--out',required=True)
-    p.add_argument('--datasets',nargs='+',choices=['kitti','waymo','av2'],required=True)
+    p.add_argument('--datasets',nargs='+',choices=['kitti','waymo','av2','nuscenes'],required=True)
     p.add_argument('--split',choices=['train','val','test'],default='val')
     p.add_argument('--max-clips-per-dataset',type=int,default=3)
     p.add_argument('--seed',type=int,default=0);p.add_argument('--force',action='store_true')

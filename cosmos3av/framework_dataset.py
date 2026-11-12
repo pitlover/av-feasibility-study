@@ -1,3 +1,4 @@
+# STAGE1_MULTISOURCE_FPS_V1 (local patch; no remote writes)
 # V2_META_COMPAT_PATCH_20261108_V21
 """Native Generator AV Inverse Dynamics dataset for NVIDIA Cosmos Framework.
 
@@ -41,6 +42,10 @@ class AVInverseDataset(Dataset):
         row = self.items[idx]
         if self.validate_on_load:
             preflight(row, max_dt_error_s=self.max_dt_error_s)
+        meta = json.loads(Path(row['meta']).read_text(encoding='utf8'))
+        sample_fps = meta.get('fps')
+        if type(sample_fps) is not int or sample_fps not in (10, 12, 20):
+            raise ValueError(f"{row['clip_id']}: unsupported clip FPS {sample_fps!r}")
         video_path = row['video']
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
@@ -62,7 +67,6 @@ class AVInverseDataset(Dataset):
             raise ValueError(f'Expected 60x9 GT action: {row["clip_id"]}')
         if self.normalizer is not None:
             from cosmos3virtual.normalization import transform_actions
-            meta = json.loads(Path(row['meta']).read_text(encoding='utf8'))
             if action_frame(meta) != 'camera' or meta.get('action_normalization') != 'none':
                 raise ValueError(f'Custom normalizer needs raw camera actions: {row["clip_id"]}')
             actions = transform_actions(actions, self.normalizer)
@@ -72,7 +76,7 @@ class AVInverseDataset(Dataset):
             'mode': 'inverse_dynamics',
             'domain_id': torch.tensor(get_domain_id('av'), dtype=torch.long),
             'viewpoint': 'ego_view',
-            'conditioning_fps': torch.tensor(10, dtype=torch.long),
+            'conditioning_fps': torch.tensor(sample_fps, dtype=torch.long),
             'idle_frames': torch.tensor(0, dtype=torch.long),
             'ai_caption': 'You are an autonomous vehicle planning system.',
         }

@@ -1,3 +1,4 @@
+# STAGE1_MULTISOURCE_FPS_V1 (local patch; no remote writes)
 # V2_META_COMPAT_PATCH_20261108_V21
 """Dataset discovery, stage-aware selection and preflight validation.
 
@@ -15,7 +16,7 @@ import numpy as np
 from cosmos3prep.contracts import action_frame, action_pose_path
 
 N_FRAMES, N_ACTIONS, ACTION_DIM = 61, 60, 9
-DATASETS = ('kitti', 'waymo', 'av2')
+DATASETS = ('kitti', 'waymo', 'av2', 'nuscenes')
 
 
 def load_index(root: Path) -> list[dict]:
@@ -55,8 +56,9 @@ def preflight(r: dict, *, max_dt_error_s: float = 0.07, check_video: bool = Fals
         raise ValueError(f'{r["clip_id"]}: expected backward_framewise, got {meta.get("pose_convention")}')
     if meta.get('action_normalization') != 'none':
         raise ValueError(f'{r["clip_id"]}: expected unnormalized 9D GT')
-    if meta.get('fps') != 10 or meta.get('frame_count') != 61 or meta.get('action_count') != 60:
-        raise ValueError(f'{r["clip_id"]}: expected 10fps/61 video frames/60 actions')
+    nominal_fps = meta.get('fps')
+    if type(nominal_fps) is not int or nominal_fps not in (10, 12, 20) or meta.get('frame_count') != 61 or meta.get('action_count') != 60:
+        raise ValueError(f'{r["clip_id"]}: expected 10/12/20fps, 61 frames and 60 actions')
     a = np.load(paths['action_file'], mmap_mode='r', allow_pickle=False)
     if a.shape != (N_ACTIONS, ACTION_DIM) or not np.isfinite(a).all():
         raise ValueError(f'{r["clip_id"]}: malformed action {a.shape}')
@@ -67,31 +69,35 @@ def preflight(r: dict, *, max_dt_error_s: float = 0.07, check_video: bool = Fals
     if ts.shape != (N_FRAMES,) or not np.isfinite(ts).all() or not np.all(np.diff(ts) > 0):
         raise ValueError(f'{r["clip_id"]}: missing/nonmonotonic timestamps')
     dt = np.diff(ts)
-    # Native KITTI can differ from exact nominal 10Hz; flag unacceptable large gaps.
-    if float(np.abs(dt - 0.1).max()) > max_dt_error_s:
-        raise ValueError(f'{r["clip_id"]}: max |dt-0.1|={np.abs(dt - 0.1).max():.4f}s')
+    expected_dt = 1.0 / nominal_fps
+    # Native 20Hz and nuScenes 12Hz need a tighter gap bound than nominal 10Hz.
+    tolerance = min(max_dt_error_s, {10: 0.07, 12: 0.04, 20: 0.025}[nominal_fps])
+    dt_error = float(np.max(np.abs(dt - expected_dt)))
+    if dt_error > tolerance:
+        raise ValueError(f'{r["clip_id"]}: max |dt-1/{nominal_fps}|={dt_error:.4f}s (tolerance={tolerance:.4f}s)')
     if check_video:
         import cv2
         cap = cv2.VideoCapture(str(paths['video']))
         if not cap.isOpened():
             raise ValueError(f'{r["clip_id"]}: MP4 cannot be decoded')
         cnt = 0
-        fps = cap.get(cv2.CAP_PROP_FPS)
+        video_fps = cap.get(cv2.CAP_PROP_FPS)
         while True:
             ok, _ = cap.read()
-            if not ok: break
+            if not ok:
+                break
             cnt += 1
         cap.release()
-        if cnt != 61 or abs(fps - 10) > .01:
-            raise ValueError(f'{r["clip_id"]}: MP4 {cnt} frames at {fps}fps')
+        if cnt != N_FRAMES or abs(video_fps - nominal_fps) > 0.01:
+            raise ValueError(f'{r["clip_id"]}: MP4 {cnt} frames at {video_fps}fps (expected {nominal_fps})')
     # V2 camera-action GT uses poses_local_virtual_camera.npy.
     if action_frame(meta) == 'camera':
         action_pose_path(meta, paths['meta'].parent)
-    return {'max_dt_error_s': float(np.abs(dt - .1).max()), 'mean_dt_s': float(dt.mean())}
+    return {'max_dt_error_s': dt_error, 'mean_dt_s': float(dt.mean()), 'fps': nominal_fps}
 
 
 def select_stage(rows: list[dict], stage: str, selected: list[str], split: str = 'train') -> list[dict]:
-    allowed = {'kitti', 'waymo'} if stage == 'pretrain' else {'av2'}
+    allowed = set(DATASETS) if stage == 'pretrain' else {'av2'}
     if not selected or len(set(selected)) != len(selected) or set(selected) - allowed:
         raise ValueError(f'{stage}: datasets must be a nonempty subset of {sorted(allowed)}')
     result = [r for r in rows if r['dataset'] in selected and r['split'] == split]

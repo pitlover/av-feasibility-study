@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Cosmos3-Edge AV Stage1-only experiment: KITTI+Waymo train, held-out validation, and visualization.
+# Cosmos3-Edge AV Stage1: selected KITTI/Waymo/AV2/nuScenes sources, mixed FPS, validation and visualization.
 # Requires the user's existing cosmos3av and cosmos3eval packages installed at the project root.
 # Usage: bash stage1_full_train_eval.sh inspect|plan|train|export|prepare|oracle|infer|score|render|evaluate|all
 # Safe defaults: raw actions, separate run names, no overwrite of checkpoints or predictions.
+# STAGE1_MULTISOURCE_FPS_V1 (local patch; no remote writes)
 set -Eeuo pipefail
 
 # Usage:
@@ -81,11 +82,35 @@ resolve_save_root(){
 RUNS_ROOT="$(resolve_save_root "$RUNS_ROOT")"
 EXPORTS_ROOT="$(resolve_save_root "$EXPORTS_ROOT")"
 EVALUATION_ROOT="$(resolve_save_root "$EVALUATION_ROOT")"
+SPEC_CMD=(python "$CONFIG_HELPER" --format source-json)
+[[ -z "$CONFIG_PATH" ]] || SPEC_CMD+=(--toml "$CONFIG_PATH")
+SOURCE_SPEC_JSON="$("${SPEC_CMD[@]}" "${OVERRIDES[@]}")" || exit 2
+DATASETS_JSON="$(python - "$SOURCE_SPEC_JSON" <<'PY_DATASETS'
+import json,sys
+print(json.dumps(json.loads(sys.argv[1])['datasets']))
+PY_DATASETS
+)"
+# macOS has Bash 3.2, which lacks mapfile/readarray.
+DATASET_LIST=()
+while IFS= read -r name; do
+  [[ -n "$name" ]] && DATASET_LIST+=("$name")
+done < <(python - "$DATASETS_JSON" <<'PY_NAMES'
+import json,sys
+for name in json.loads(sys.argv[1]):
+    print(name)
+PY_NAMES
+)
+DATASET_SUFFIX="$(IFS=_; echo "${DATASET_LIST[*]}")"
+MIX_WEIGHTS="$(python - "$SOURCE_SPEC_JSON" <<'PY_WEIGHTS'
+import json,sys
+s=json.loads(sys.argv[1]); print(','.join(f'{d}:{s["weights"][d]}' for d in s['datasets']))
+PY_WEIGHTS
+)"
 if [[ "$MODE" == config ]]; then
   echo "[OUTPUT] stage1_run=$RUNS_ROOT/$RUN_TAG"
   echo "[OUTPUT] final_dcp=$RUNS_ROOT/$RUN_TAG/outputs/cosmos3_av_id/pretrain/$RUN_TAG/checkpoints/$(printf 'iter_%09d' "$MAX_ITERS")"
   echo "[OUTPUT] export=$EXPORTS_ROOT/${RUN_TAG}_iter_${STEP}"
-  echo "[OUTPUT] eval_dir=${EVAL_DIR_OVERRIDE:-$EVALUATION_ROOT/stage1_${RUN_TAG}/kitti_waymo_${EVAL_TAG}}"
+  echo "[OUTPUT] eval_dir=${EVAL_DIR_OVERRIDE:-$EVALUATION_ROOT/stage1_${RUN_TAG}/${DATASET_SUFFIX}_${EVAL_TAG}}"
   echo "[OUTPUT] pred_dir=${PRED_DIR_OVERRIDE:-$EVALUATION_ROOT/pred_${RUN_TAG}_iter_${STEP}_${EVAL_TAG}}"
   echo "[TOML] ${CONFIG_PATH:-<default/environment>}"
   cfg_cmd=(python "$CONFIG_HELPER" --format json)
@@ -100,7 +125,7 @@ S1_DCP="$S1_OUTPUT/checkpoints/$(printf 'iter_%09d' "$STEP")"
 S1_FINAL_DCP="$S1_OUTPUT/checkpoints/$(printf 'iter_%09d' "$MAX_ITERS")"
 S1_CFG="$S1_OUTPUT/config.yaml"
 MODEL="$EXPORTS_ROOT/${RUN_TAG}_iter_${STEP}"
-EVAL="$EVALUATION_ROOT/stage1_${RUN_TAG}/kitti_waymo_${EVAL_TAG}"
+EVAL="$EVALUATION_ROOT/stage1_${RUN_TAG}/${DATASET_SUFFIX}_${EVAL_TAG}"
 PRED="$EVALUATION_ROOT/pred_${RUN_TAG}_iter_${STEP}_${EVAL_TAG}"
 # Optional explicit evaluation/prediction paths (existing results, e.g. *_retry1).
 [[ -z "${EVAL_DIR_OVERRIDE:-}" ]] || EVAL="$EVAL_DIR_OVERRIDE"
@@ -117,13 +142,8 @@ done
 (( GPUS>=1 && MAX_ITERS>=1 && SAVE_EVERY>=1 && EPOCH_CLIPS>=1 && EVAL_CLIPS>=1 && STEP>=1 && INFER_GPUS>=1 )) || fail 'Invalid nonpositive integer option'
 (( MAX_ITERS % SAVE_EVERY == 0 )) || fail 'MAX_ITERS must be divisible by SAVE_EVERY for the requested final checkpoint check'
 
-# Read-only evaluation must not depend on a historical Stage1 checkpoint or VAE.
-case "$MODE" in
-  inspect|plan|train|export|prepare|oracle|infer|all)
-    need_file "$PROCESSED/index.jsonl" ;;
-  evaluate)
-    [[ "$EVAL_MODE" != full ]] || need_file "$PROCESSED/index.jsonl" ;;
-esac
+# Dataset index locations are resolved per selected dataset at inspect/plan time.
+# Training/export/evaluation thereafter rely on the frozen run manifests, not live index roots.
 case "$MODE" in
   plan|train|export|all)
     if [[ -z "$EDGE_DCP" || -z "$WAN_VAE" ]]; then
@@ -143,8 +163,8 @@ TRAINER=sft
 [[ "$REPTILE_ENABLED" != true ]] || TRAINER=reptile
 printf '[CONFIG] mode=%s run=%s iter=%s export_step=%s gpus=%s trainer=%s\n' "$MODE" "$RUN_TAG" "$MAX_ITERS" "$STEP" "$GPUS" "$TRAINER"
 printf '[CONFIG] processed=%s eval=%s pred=%s eval_mode=%s\n' "$PROCESSED" "$EVAL" "$PRED" "$EVAL_MODE"
-printf '[CONFIG] source_toml=%s weights=kitti:%s,waymo:%s wandb=%s\n' \
-  "${CONFIG_PATH:-none}" "$KITTI_WEIGHT" "$WAYMO_WEIGHT" "$WANDB_MODE"
+printf '[CONFIG] source_toml=%s datasets=%s weights=%s wandb=%s\n' \
+  "${CONFIG_PATH:-none}" "${DATASET_LIST[*]}" "$MIX_WEIGHTS" "$WANDB_MODE"
 printf '[OUTPUT ROOTS] runs=%s exports=%s evaluation=%s\n' "$RUNS_ROOT" "$EXPORTS_ROOT" "$EVALUATION_ROOT"
 [[ "$TRAINER" != reptile ]] || printf '[CONFIG] reptile: mode=%s schedule=%s inner_steps=%s meta_lr=%s->x%s clips_per_rank=%s (max_iters = META-iterations)\n' \
   "$REPTILE_EPISODE_MODE" "$REPTILE_DATASET_SCHEDULE" "$REPTILE_INNER_STEPS" "$REPTILE_META_LR" "$REPTILE_META_LR_MIN_RATIO" "$REPTILE_CLIPS_PER_RANK"
@@ -161,9 +181,9 @@ check_frozen_config(){
   if ! python - "$S1/resolved_stage1_config.json" "$actual" <<'PYCOMPARE'
 import json,sys
 prev=json.load(open(sys.argv[1])); now=json.load(open(sys.argv[2]))
-keys=('job.run_tag','paths.processed','data.epoch_clips','data.seed',
-      'data.weights.kitti','data.weights.waymo','train.gpus',
-      'train.max_iters','train.save_every','optimizer.lr')
+keys=('job.run_tag','paths.processed','data.datasets','data.epoch_clips','data.seed',
+      'train.gpus','train.max_iters','train.save_every','optimizer.lr')
+keys+=tuple(sorted(k for k in set(prev)|set(now) if k.startswith(('data.weights.','data.sources.'))))
 # Reptile knobs are part of the training plan too (plans made before the [reptile] table existed have none).
 keys+=tuple(sorted(k for k in set(prev)|set(now) if k.startswith('reptile.')))
 diffs=[(k,prev.get(k),now.get(k)) for k in keys if prev.get(k)!=now.get(k)]
@@ -176,43 +196,45 @@ PYCOMPARE
 }
 
 inspect(){
-  python - "$PROCESSED/index.jsonl" <<'PY'
-import json, sys
+  local tmp
+  tmp="$(mktemp -d)"
+  python "$SCRIPT_DIR/scripts/stage1_source_index.py" --spec-json "$SOURCE_SPEC_JSON" --outdir "$tmp" || { rm -rf "$tmp"; return 1; }
+  python - "$tmp/index.jsonl" "$DATASETS_JSON" <<'PY_INSPECT'
+import json,sys
 import numpy as np
 from pathlib import Path
-from collections import Counter, defaultdict
-p=Path(sys.argv[1]);rows=[json.loads(line) for line in p.read_text().splitlines() if line.strip()]
-print('\n[DATASET INDEX]')
-print('dataset   split    clips   sequences')
-for ds in ('kitti','waymo','av2'):
+p=Path(sys.argv[1]);datasets=json.loads(sys.argv[2]);rows=[json.loads(s) for s in p.read_text().splitlines() if s.strip()]
+print('\n[STAGE1 SELECTED DATASETS]')
+print('dataset       split     clips    sequences')
+for ds in datasets:
     for split in ('train','val'):
         subset=[r for r in rows if r['dataset']==ds and r['split']==split]
-        print(f'{ds:8s}  {split:5s}  {len(subset):6d}  {len({r["sequence"] for r in subset}):6d}')
-print('\n[RAW TRANSLATION STATS: TRAIN ONLY, up to 200 unique clips/dataset]')
-for ds in ('kitti','waymo'):
-    subset=sorted((r for r in rows if r['dataset']==ds and r['split']=='train'), key=lambda x:x['clip_id'])
-    if not subset: print('[MISSING]',ds,'train');continue
+        print(f'{ds:12s}  {split:5s}  {len(subset):7d}  {len({r["sequence"] for r in subset}):8d}')
+print('\n[RAW TRANSLATION STATS: TRAIN, up to 200 clips per dataset]')
+for ds in datasets:
+    subset=sorted((r for r in rows if r['dataset']==ds and r['split']=='train'),key=lambda x:x['clip_id'])
+    if not subset: continue
     rng=np.random.default_rng(42)
     sel=rng.choice(len(subset),size=min(200,len(subset)),replace=False)
     arr=np.concatenate([np.load(subset[int(i)]['action_file'],allow_pickle=False)[:,:3] for i in sel])
-    print(f'{ds}: {len(sel)} clips ({len(arr)} actions), camera-frame translation [m/step]')
+    print(f'{ds}: {len(sel)} clips; translation m/step (NOT m/s)')
     for j,axis in enumerate('XYZ'):
-        print(f'  {axis}: mean={np.mean(arr[:,j]):+.5f}, std={np.std(arr[:,j]):.5f}, q01={np.quantile(arr[:,j],.01):+.5f}, q99={np.quantile(arr[:,j],.99):+.5f}')
-for ds in ('kitti','waymo'):
-    tr={r['sequence'] for r in rows if r['dataset']==ds and r['split']=='train'}
-    va={r['sequence'] for r in rows if r['dataset']==ds and r['split']=='val'}
-    if not va:
-        print(f'[WARNING] {ds} has NO validation clips; prepare cannot run until held-out data is preprocessed.')
-    overlap=tr&va
-    if overlap:print(f'[WARNING] {ds}: TRAIN/VAL sequence overlap: {sorted(overlap)[:10]}')
-PY
+        print(f'  {axis}: mean={np.mean(arr[:,j]):+.5f}, std={np.std(arr[:,j]):.5f}')
+    train={r['sequence'] for r in rows if r['dataset']==ds and r['split']=='train'}
+    val={r['sequence'] for r in rows if r['dataset']==ds and r['split']=='val'}
+    if not val: print(f'[WARNING] no held-out validation clips for {ds}')
+    if train&val: raise SystemExit(f'[ERROR] {ds}: train/val sequences overlap')
+PY_INSPECT
+  local status=$?
+  rm -rf "$tmp"
+  return "$status"
 }
 
 plan(){
   [[ ! -e "$S1" ]] || fail "Existing run directory: $S1. Choose a new RUN_TAG (never overwrite)."
-  echo "[PLAN] KITTI + Waymo, raw 9D actions; weights=kitti:$KITTI_WEIGHT,waymo:$WAYMO_WEIGHT"
-  # [reptile] enabled: hand the resolved Reptile knobs to the planner; it copies them into the run dir
-  # (reptile_config.json), writes the unique-clip manifest and marks run.json trainer=reptile.
+  mkdir -p "$S1/input_sources"
+  python "$SCRIPT_DIR/scripts/stage1_source_index.py" --spec-json "$SOURCE_SPEC_JSON" --outdir "$S1/input_sources" || fail 'Source-index build failed'
+  echo "[PLAN] datasets=${DATASET_LIST[*]} weights=$MIX_WEIGHTS (per-clip FPS 10/12/20)"
   local reptile_args=()
   if [[ "$TRAINER" == reptile ]]; then
     REPTILE_JSON="$(mktemp)"
@@ -220,30 +242,27 @@ plan(){
     [[ -z "$CONFIG_PATH" ]] || rcmd+=(--toml "$CONFIG_PATH")
     "${rcmd[@]}" "${OVERRIDES[@]}" > "$REPTILE_JSON" || fail 'Cannot resolve the [reptile] settings'
     reptile_args=(--reptile-config "$REPTILE_JSON")
-    echo "[PLAN] Reptile meta-pretraining: episode_mode=$REPTILE_EPISODE_MODE inner_steps=$REPTILE_INNER_STEPS meta_lr=$REPTILE_META_LR; $MAX_ITERS meta-iterations"
+    echo "[PLAN] Reptile meta-pretraining: episode_mode=$REPTILE_EPISODE_MODE inner_steps=$REPTILE_INNER_STEPS meta_lr=$REPTILE_META_LR"
   fi
-  python -m cosmos3av.cli plan --stage pretrain --datasets kitti waymo \
-    --weights "kitti:${KITTI_WEIGHT},waymo:${WAYMO_WEIGHT}" --processed-root "$PROCESSED" \
+  python -m cosmos3av.cli plan --stage pretrain --datasets "${DATASET_LIST[@]}" \
+    --weights "$MIX_WEIGHTS" --processed-root "$S1/input_sources" \
     --init-checkpoint "$EDGE_DCP" --wan-vae "$WAN_VAE" \
     --outdir "$S1" --epoch-clips "$EPOCH_CLIPS" \
     --max-iters "$MAX_ITERS" --save-every "$SAVE_EVERY" --lr "$LR" \
     --gpus "$GPUS" --seed "$SEED" --wandb-mode "${WANDB_MODE:-disabled}" --full-preflight "${reptile_args[@]}"
-  # Store a copy of the declared and resolved experiment configuration.
   [[ -z "$CONFIG_PATH" ]] || cp "$CONFIG_PATH" "$S1/source_stage1_config.toml"
-  json_cmd=(python "$CONFIG_HELPER" --format json)
+  local json_cmd=(python "$CONFIG_HELPER" --format json)
   [[ -z "$CONFIG_PATH" ]] || json_cmd+=(--toml "$CONFIG_PATH")
   "${json_cmd[@]}" "${OVERRIDES[@]}" > "$S1/resolved_stage1_config.json"
   python -m cosmos3av.cli smoke --manifest "$S1/train.jsonl"
-  python - "$S1/run.json" "$TRAINER" <<'PY'
+  python - "$S1/run.json" "$TRAINER" <<'PY_PLAN'
 import json,sys
-r=json.load(open(sys.argv[1])); want=sys.argv[2]
-assert r['stage']=='pretrain' and r['action_frame']=='camera'
-assert r['action_normalizer'] is None, 'This baseline must remain RAW action'
-got=r.get('trainer','sft')
-assert got==want, f'run.json trainer={got!r} but the TOML asked for {want!r}'
-print('[PLAN OK] raw camera actions; trainer:',got,'; train entries:',r['n_train'],'val entries:',r['n_val'])
-if got=='reptile': print('[PLAN OK] reptile config:',r['reptile_config'],'| unique clips:',r.get('reptile_clips'))
-PY
+r=json.load(open(sys.argv[1]));want=sys.argv[2]
+assert r['stage']=='pretrain' and r['action_frame']=='camera', 'Stage 1 requires camera-relative raw actions'
+assert r['action_normalizer'] is None, 'Stage1 baseline must remain raw action'
+assert r.get('trainer','sft')==want, 'unexpected trainer selection'
+print('[PLAN OK] datasets:',r['datasets'],'trainer:',want,'train:',r['n_train'],'val:',r['n_val'])
+PY_PLAN
 }
 
 train(){
@@ -289,25 +308,26 @@ prepare_eval(){
     return
   fi
   [[ ! -e "$EVAL" ]] || fail "Incomplete evaluation dir: $EVAL; choose another EVAL_TAG"
-  python - "$PROCESSED" "$EVAL" "$EVAL_CLIPS" "$SEED" <<'PY'
-import sys, json, random
+  local index_root="$S1/input_sources"
+  [[ -f "$index_root/index.jsonl" ]] || index_root="$PROCESSED"  # existing historical runs
+  python - "$index_root" "$EVAL" "$EVAL_CLIPS" "$SEED" "$DATASETS_JSON" <<'PY_PREPARE'
+import sys,json,random
 from pathlib import Path
 from collections import defaultdict
-from cosmos3eval.data import read_jsonl, write_jsonl, verify_row, make_request
-root,out=map(Path,sys.argv[1:3]);num=int(sys.argv[3]);seed=int(sys.argv[4])
+from cosmos3eval.data import read_jsonl,write_jsonl,verify_row,make_request
+root,out=map(Path,sys.argv[1:3]);num=int(sys.argv[3]);seed=int(sys.argv[4]);datasets=json.loads(sys.argv[5])
 rows=read_jsonl(root/'index.jsonl')
 selected=[]
-for ds in ('kitti','waymo'):
+for ds_index,ds in enumerate(datasets):
     train={r['sequence'] for r in rows if r['dataset']==ds and r['split']=='train'}
     val=[r for r in rows if r['dataset']==ds and r['split']=='val']
-    if not val:raise SystemExit(f'[ERROR] No {ds}/val clips in index; preprocess held-out {ds} validation first')
+    if not val:raise SystemExit(f'[ERROR] No {ds}/val clips; preprocess held-out validation before evaluate')
     overlap=train&{r['sequence'] for r in val}
     if overlap:raise SystemExit(f'[ERROR] {ds} train/val sequence overlap: {sorted(overlap)[:5]}')
     groups=defaultdict(list)
-    for r in val:groups[r['sequence']].append(r)
-    rng=random.Random(seed + (1 if ds=='waymo' else 0))
-    keys=sorted(groups)
-    rng.shuffle(keys)
+    for row in val:groups[row['sequence']].append(row)
+    rng=random.Random(seed+ds_index)
+    keys=sorted(groups);rng.shuffle(keys)
     for key in keys:rng.shuffle(groups[key])
     chosen=[]
     while len(chosen)<min(num,len(val)):
@@ -324,7 +344,7 @@ out.mkdir(parents=True,exist_ok=False)
 write_jsonl(out/'selection.jsonl',selected)
 write_jsonl(out/'inference_requests.jsonl',[make_request(r,seed) for r in selected])
 print('[PREPARE OK]',out,'total clips=',len(selected))
-PY
+PY_PREPARE
 }
 
 oracle(){
@@ -398,18 +418,32 @@ PY
 
 render(){
   verify_predictions
-  local selected ds cid
+  local selected ds cid render_fps image_mode
   selected="$(python "$SCRIPT_DIR/scripts/choose_render_clips.py" \
-    --selection "$EVAL/selection.jsonl" --datasets kitti waymo \
+    --selection "$EVAL/selection.jsonl" --datasets "${DATASET_LIST[@]}" \
     --max-per-dataset "$RENDER_MAX_CLIPS" --clip-ids-json "$RENDER_CLIP_IDS_JSON")" \
     || fail "Could not select Stage1 clips for rendering"
   while IFS=$'\t' read -r ds cid; do
     [[ -n "$cid" ]] || continue
-    echo "[RENDER] $ds clip=$cid (ground_height_m=$GROUND_HEIGHT_M approximate)"
-    python -m cosmos3eval.cli render --eval-dir "$EVAL" --pred-dir "$PRED" \
-      --clip-id "$cid" --layout "$RENDER_LAYOUT" --horizon-steps "$HORIZON_STEPS" \
-      --ground-height-m "$GROUND_HEIGHT_M" --fps "$RENDER_FPS" \
-      --out-dir "$PRED/qualitative/$ds"
+    # eval.fps=0 means encode the render at that clip's recorded FPS.
+    read -r render_fps image_mode < <(python - "$EVAL/selection.jsonl" "$cid" "$RENDER_FPS" <<'PY_RENDER'
+import json,sys
+from pathlib import Path
+rows=[json.loads(s) for s in Path(sys.argv[1]).read_text().splitlines() if s.strip()]
+row=next(r for r in rows if r['clip_id']==sys.argv[2])
+meta=json.loads(Path(row['meta']).read_text())
+render_fps=float(sys.argv[3]); render_fps = render_fps if render_fps > 0 else float(meta['fps'])
+print(render_fps,meta.get('image_mode','virtual'))
+PY_RENDER
+)
+    echo "[RENDER] $ds clip=$cid video_fps=$render_fps image_mode=$image_mode"
+    local opts=(--eval-dir "$EVAL" --pred-dir "$PRED" --clip-id "$cid"
+      --horizon-steps "$HORIZON_STEPS" --ground-height-m "$GROUND_HEIGHT_M" --fps "$render_fps"
+      --out-dir "$PRED/qualitative/$ds")
+    if [[ "$image_mode" == virtual ]]; then
+      opts+=(--layout "$RENDER_LAYOUT")
+    fi
+    python -m cosmos3eval.cli render "${opts[@]}"
   done <<< "$selected"
   echo "[RENDER OK] $PRED/qualitative/"
 }

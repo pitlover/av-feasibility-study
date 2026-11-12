@@ -1,3 +1,4 @@
+# STAGE1_MULTISOURCE_FPS_V1 (local patch; no remote writes)
 """Held-out evaluation selections with V2/V4 metadata compatibility."""
 import json
 from pathlib import Path
@@ -33,8 +34,9 @@ def verify_row(r,*,pose_tol_m=.01,pose_tol_deg=.1):
             raise ValueError(f'{cid}: unsupported V2 action encoding {enc}')
     elif enc!='translation3 + rot6d_column_based':
         raise ValueError(f'{cid}: unknown V4 action encoding {enc}')
-    if m.get('fps')!=10 or m.get('frame_count')!=61 or m.get('action_count')!=60:
-        raise ValueError(f'{cid}: expected 10Hz/61 frames/60 actions')
+    fps=m.get('fps')
+    if type(fps) is not int or fps not in (10,12,20) or m.get('frame_count')!=61 or m.get('action_count')!=60:
+        raise ValueError(f'{cid}: expected 10/12/20Hz, 61 frames and 60 actions')
     gt=check_pose_array(np.load(action_pose_path(m,meta.parent),allow_pickle=False))
     actions=check_actions(np.load(action,allow_pickle=False))
     recon=decode_actions(actions,m['pose_convention'])
@@ -45,6 +47,10 @@ def verify_row(r,*,pose_tol_m=.01,pose_tol_deg=.1):
     ts=np.load(meta.parent/'timestamps_s.npy',allow_pickle=False)
     if ts.shape!=(61,) or not np.isfinite(ts).all() or np.min(np.diff(ts))<=0:
         raise ValueError(f'{cid}: invalid timestamps')
+    dt_error=float(np.max(np.abs(np.diff(ts)-1.0/fps)))
+    tol={10:.07,12:.04,20:.025}[fps]
+    if dt_error>tol:
+        raise ValueError(f'{cid}: timestamp gaps exceed tolerance for {fps}Hz ({dt_error:.4f}s > {tol:.4f}s)')
     return {'gt_pose':gt,'gt_actions':actions,'metadata':normalized_metadata(m),
             'timestamps':ts,'max_gt_roundtrip_m':pos,'max_gt_roundtrip_deg':rot}
 
@@ -52,7 +58,7 @@ def verify_row(r,*,pose_tol_m=.01,pose_tol_deg=.1):
 def make_request(r,seed=0):
     return {'name':r['clip_id'],'model_mode':'inverse_dynamics','domain_name':'av',
             'view_point':'ego_view','vision_path':str(Path(r['video']).resolve()),
-            'action_chunk_size':60,'fps':10,'image_size':480,'seed':seed,
+            'action_chunk_size':60,'fps':int(json.loads(Path(r['meta']).read_text(encoding='utf-8'))['fps']),'image_size':480,'seed':seed,
             'prompt':'You are an autonomous vehicle planning system.'}
 
 

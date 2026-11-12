@@ -1,3 +1,4 @@
+# STAGE1_MULTISOURCE_FPS_V1 (local patch; no remote writes)
 # V2_META_COMPAT_PATCH_20261108_V21
 """Stage-aware Cosmos3-Edge AV ID dataset and launch-plan generator."""
 from __future__ import annotations
@@ -23,7 +24,7 @@ def _weights(value: str, selected: list[str]):
     res = {}
     for item in value.split(','):
         if ':' not in item:
-            raise ValueError('--weights expects kitti:1,waymo:1')
+            raise ValueError('--weights expects comma-separated dataset:weight pairs')
         k, v = item.split(':',1)
         if k in res:
             raise ValueError(f'Duplicate weight: {k}')
@@ -316,7 +317,7 @@ def stats(args):
             errors.append(q['max_dt_error_s'])
             durations.append(q['mean_dt_s']*60)
         ds_stats[ds]={'clips_checked':len(errors),'mean_duration_s':float(np.mean(durations)),
-          'max_abs_dt_error_s':float(np.max(errors)), 'nominal_fps':10}
+          'max_abs_dt_error_s':float(np.max(errors)), 'fps_values':sorted({int(json.loads(Path(r['meta']).read_text(encoding='utf8'))['fps']) for r in group[:args.max_clips if args.max_clips else None]})}
     print(json.dumps(ds_stats,indent=2,ensure_ascii=False))
 
 
@@ -349,7 +350,7 @@ def main(argv=None):
     q=sub.add_parser('plan', help='validate data and prepare stage-specific training manifests')
     q.add_argument('--processed-root',required=True)
     q.add_argument('--stage',choices=['pretrain','posttrain'],required=True)
-    q.add_argument('--datasets',nargs='+', choices=['kitti','waymo','av2'])
+    q.add_argument('--datasets',nargs='+', choices=['kitti','waymo','av2','nuscenes'])
     q.add_argument('--weights',default='',help='e.g. kitti:1,waymo:1')
     q.add_argument('--wandb-mode', choices=['disabled','online','offline'], default='disabled',
                    help='W&B mode for training; disabled by default')
@@ -381,9 +382,9 @@ def main(argv=None):
     x.add_argument('--wandb-mode', choices=['disabled','online','offline'], default=None,
                    help='Optional runtime mode override without modifying sft_config.toml')
     x.set_defaults(func=launch)
-    s=sub.add_parser('timing',help='inspect acquisition dt vs nominal 10Hz for any dataset')
+    s=sub.add_parser('timing',help='inspect capture timestamps against recorded FPS per clip')
     s.add_argument('--processed-root',required=True)
-    s.add_argument('--dataset',choices=['all','kitti','waymo','av2'],default='all')
+    s.add_argument('--dataset',choices=['all','kitti','waymo','av2','nuscenes'],default='all')
     s.add_argument('--max-clips',type=int,default=100)
     s.add_argument('--max-dt-error-s',type=float,default=.07)
     s.set_defaults(func=stats)
