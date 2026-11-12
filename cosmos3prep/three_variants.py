@@ -1,4 +1,4 @@
-"""Three-camera/FPS ablation preprocessors for Cosmos3 AV inverse dynamics.
+"""Camera/FPS ablation preprocessors for Cosmos3 AV inverse dynamics.
 
 Install alongside the *existing* cosmos3prep package on feat/prepare_nuscenes.
 This module deliberately does not modify the original v2 pipeline, and writes
@@ -9,6 +9,8 @@ Experiments
 original_10hz    Native pixels/K, sampled at 10 Hz.
 original_native  Native pixels/K, original camera cadence (KITTI 10, Waymo 10, AV2 20).
 virtual_native   Common virtual pinhole K (640x384 / 45 deg), original cadence.
+
+nuScenes supports original_native and virtual_native, both with its native ~12Hz CAM_FRONT stream.
 
 The camera extrinsics are always the physical sensor extrinsics.  All variants
 produce 61 RGB frames, 60 camera-relative 9D actions, and real timestamps.
@@ -29,6 +31,7 @@ import numpy as np
 
 from .core import Frame, frame_runs_10hz, frame_runs_kitti_native, rebuild_index, safe_id
 from .datasets import iter_av2, iter_kitti, iter_waymo
+from .nuscenes_adapter import iter_nuscenes
 from .geometry import decode_local, encode_actions, localize, validate_pose_array
 from .contracts import action_pose_path
 from cosmos3virtual.camera import remap_bgr, virtual_intrinsics
@@ -36,13 +39,15 @@ from cosmos3virtual.camera import remap_bgr, virtual_intrinsics
 VARIANTS = ("original_10hz", "original_native", "virtual_native")
 N_FRAMES = 61
 N_ACTIONS = 60
-NOMINAL_SOURCE_FPS = {"kitti": 10, "waymo": 10, "av2": 20}
-DEFAULT_CAMERA = {"kitti": "image_2", "waymo": "FRONT", "av2": "stereo_front_left"}
+NOMINAL_SOURCE_FPS = {"kitti": 10, "waymo": 10, "av2": 20, "nuscenes": 12}
+DEFAULT_CAMERA = {"kitti": "image_2", "waymo": "FRONT", "av2": "stereo_front_left", "nuscenes": "CAM_FRONT"}
 
 
 def target_fps(dataset: str, variant: str) -> int:
     if dataset not in NOMINAL_SOURCE_FPS or variant not in VARIANTS:
         raise ValueError(f"Invalid dataset/variant: {dataset}/{variant}")
+    if dataset == "nuscenes" and variant == "original_10hz":
+        raise ValueError("nuScenes supports two 12Hz variants only: original_native, virtual_native")
     return 10 if variant == "original_10hz" else NOMINAL_SOURCE_FPS[dataset]
 
 
@@ -64,7 +69,7 @@ def native_runs(frames: list[Frame], dataset: str, fps: int) -> list[list[Frame]
         return []
     ideal = 1.0 / fps
     # Accept modest clock jitter but reject missing 20 Hz images (gap ~0.1 s).
-    tolerance = 0.04 if fps == 10 else 0.0225
+    tolerance = {10: 0.04, 12: 0.04, 20: 0.0225}.get(fps, 0.025)
     runs: list[list[Frame]] = []
     current = [seq[0]]
     for prev, cur in zip(seq, seq[1:]):
@@ -248,7 +253,7 @@ def write_variant_clip(frames: list[Frame], *, dataset: str, sequence: str,
             np.save(dst / filename, data)
         dt = np.diff(ts)
         original_mode = not is_virtual(variant)
-        video_distortion_corrected = (not original_mode) or dataset in ("kitti", "av2")
+        video_distortion_corrected = (not original_mode) or dataset in ("kitti", "av2", "nuscenes")
         meta = {
             "format": "cosmos3_av_preprocess_v4",
             "ablation_variant": variant,
@@ -266,7 +271,8 @@ def write_variant_clip(frames: list[Frame], *, dataset: str, sequence: str,
             "virtual_hfov_deg": hfov if is_virtual(variant) else None,
             "virtual_extrinsic_policy": "intrinsic_only_preserve_T_ego_camera",
             "action_frame": "camera", "camera_coordinate_axes": "x_right_y_down_z_forward",
-            "pose_frame": {"kitti": "velodyne", "waymo": "vehicle", "av2": "egovehicle"}[dataset],
+            "pose_frame": {"kitti": "velodyne", "waymo": "vehicle", "av2": "egovehicle",
+                           "nuscenes": "egovehicle"}[dataset],
             "pose_transform_semantics": "T_target_source, homogeneous column vector, meters",
             "pose_world_file": "poses_world_ego.npy",
             "pose_local_file": "poses_local_camera.npy",
@@ -288,7 +294,7 @@ def write_variant_clip(frames: list[Frame], *, dataset: str, sequence: str,
             "distortion_source_per_frame_file": "distortion_source_per_frame.npy",
             "video_distortion_corrected": bool(video_distortion_corrected),
             "source_pixel_geometry": (
-                "rectified" if dataset in ("kitti", "av2") else "raw_distorted"
+                "rectified" if dataset in ("kitti", "av2", "nuscenes") else "raw_distorted"
             ),
             "T_ego_camera_first": T_ego_camera[0].tolist(),
             "GT_roundtrip_max_translation_m": translation_err,
@@ -314,9 +320,12 @@ def write_variant_clip(frames: list[Frame], *, dataset: str, sequence: str,
         raise
 
 
-def validate_clips(out: Path, max_clips: int = 0, verify_video: bool = True) -> dict:
+def validate_clips(out: Path, max_clips: int = 0, verify_video: bool = True,
+                   only_dataset: str | None = None) -> dict:
     """Validate native- and virtual-FPS variants without assuming 10 Hz."""
     all_metadata = sorted(Path(out).glob("**/metadata.json"))
+    if only_dataset:
+        all_metadata = [p for p in all_metadata if p.parent.parent.parent.name == only_dataset]
     if max_clips:
         all_metadata = all_metadata[:max_clips]
     if not all_metadata:
@@ -326,7 +335,7 @@ def validate_clips(out: Path, max_clips: int = 0, verify_video: bool = True) -> 
         folder = path.parent
         meta = json.loads(path.read_text(encoding="utf-8"))
         fps = int(meta["fps"])
-        if fps not in (10, 20):
+        if fps not in (10, 12, 20):
             raise ValueError(f"{path}: unsupported FPS {fps}")
         if meta.get("frame_count") != N_FRAMES or meta.get("action_count") != N_ACTIONS:
             raise ValueError(f"{path}: incorrect frames/actions")
@@ -345,7 +354,7 @@ def validate_clips(out: Path, max_clips: int = 0, verify_video: bool = True) -> 
         if not np.all(np.diff(ts) > 0):
             raise ValueError(f"{path}: nonmonotonic timestamps")
         target_dt = 1.0 / fps
-        tol = 0.07 if fps == 10 else 0.025
+        tol = {10: 0.07, 12: 0.04, 20: 0.025}[fps]
         max_gap = float(np.max(np.abs(np.diff(ts) - target_dt)))
         if max_gap > tol:
             raise ValueError(f"{path}: dt deviation {max_gap:.5f} > {tol}")
@@ -390,6 +399,9 @@ def _iter_sequences(args):
     if args.dataset == "waymo":
         return iter_waymo(Path(args.root), camera=args.camera,
                           max_logs=args.max_logs, compression=args.compression)
+    if args.dataset == "nuscenes":
+        return iter_nuscenes(Path(args.root), camera=args.camera,
+                             max_logs=args.max_logs, strict=args.strict)
     return iter_av2(Path(args.root), camera=args.camera, max_logs=args.max_logs)
 
 
@@ -402,6 +414,8 @@ def run_prepare(args) -> int:
         raise ValueError("Virtual HFOV must be between 0 and 180 degrees")
     if args.virtual_width <= 0 or args.virtual_height <= 0:
         raise ValueError("Invalid virtual output dimensions")
+    # Reject unsupported mode BEFORE scanning potentially large source metadata.
+    target_fps(args.dataset, args.variant)
     args.camera = args.camera or DEFAULT_CAMERA[args.dataset]
     out_variant = Path(args.out_root).expanduser().resolve() / args.variant
     if out_variant.exists() and (out_variant / "index.jsonl").exists():
@@ -418,6 +432,8 @@ def run_prepare(args) -> int:
           f"output_root={out_variant}")
     if target_fps(args.dataset, args.variant) == 20:
         print("[note] 61 frames at 20 Hz cover approximately 3 seconds, not 6 seconds.")
+    elif target_fps(args.dataset, args.variant) == 12:
+        print("[note] 61 frames at nuScenes native ~12Hz cover approximately 5 seconds; original timestamps are preserved.")
     total = 0
     iterator = _iter_sequences(args)
     for log_number, (sequence, split, frames) in enumerate(iterator):
@@ -466,7 +482,7 @@ def run_prepare(args) -> int:
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description="3-way AV camera intrinsic / FPS ablation")
     sub = parser.add_subparsers(dest="command", required=True)
-    p = sub.add_parser("prepare", help="Prepare KITTI, Waymo, or AV2")
+    p = sub.add_parser("prepare", help="Prepare KITTI, Waymo, AV2, or nuScenes")
     p.add_argument("--dataset", required=True, choices=list(NOMINAL_SOURCE_FPS))
     p.add_argument("--variant", required=True, choices=VARIANTS)
     p.add_argument("--root", required=True)
@@ -490,13 +506,15 @@ def main(argv=None) -> None:
     p.add_argument("--overwrite", action="store_true")
     p.add_argument("--strict", action="store_true")
     p.set_defaults(func=run_prepare)
-    v = sub.add_parser("validate", help="Validate preprocessed output at 10 and 20 Hz")
+    v = sub.add_parser("validate", help="Validate preprocessed output at 10, 12, and 20 Hz")
     v.add_argument("--out-root", required=True)
     v.add_argument("--variant", required=True, choices=VARIANTS)
     v.add_argument("--max-clips", type=int, default=10)
+    v.add_argument("--only-dataset", choices=list(NOMINAL_SOURCE_FPS), default=None)
     v.add_argument("--no-video-decode", action="store_true")
     v.set_defaults(func=lambda args: validate_clips(Path(args.out_root) / args.variant,
-                                                     args.max_clips, not args.no_video_decode))
+                                                     args.max_clips, not args.no_video_decode,
+                                                     args.only_dataset))
     args = parser.parse_args(argv)
     args.func(args)
 
