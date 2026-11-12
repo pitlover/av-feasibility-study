@@ -1,0 +1,82 @@
+# Stage-1 joint SFT: KITTI + Waymo + AV2, virtual camera, 10 Hz.
+# All stages: inspect -> plan -> train -> export -> evaluate.
+# Requires the Stage-1 v5 full modified source files already installed.
+# The output dataset path may be a parent of its ablation subfolder; it is auto-detected.
+[job]
+run_step = "all"
+run_tag = "s1_kw_av2_virtual10hz_v1_reptile_v3"
+eval_tag = "val_seed42_v1"
+
+[paths]
+base = "."
+processed = "/mnt/ufs/users/jaeha-lee/share/jiiyoung/av-feasibility-study/processed_virtual_native_v2"
+run_root = "runs_stage1_full"
+exports_root = "exports"
+evaluation_root = "evaluation"
+framework = "cosmos-framework"
+edge_dcp = "/mnt/ufs/users/jiyoung-kim/project/backend/cosmos/cookbooks/cosmos3/generator/action/finetune/checkpoints/Cosmos3-Edge"
+wan_vae = "/mnt/ufs/users/jiyoung-kim/project/backend/cosmos/cookbooks/cosmos3/generator/action/finetune/checkpoints/wan22_vae/Wan2.2_VAE.pth"
+
+[data]
+datasets = ["kitti", "waymo", "av2"]
+epoch_clips = 3984
+seed = 42
+
+[data.weights]
+kitti = 1.0
+waymo = 1.0
+av2 = 1.0
+# kitti = 336.0
+# waymo = 2297.0
+# av2 = 1351.0
+
+[data.sources]
+# Override only datasets whose source differs from paths.processed.
+
+[train]
+gpus = 4
+max_iters = 1000
+save_every = 1000
+
+[optimizer]
+lr = 1e-5
+
+[wandb]
+enabled = false
+mode = "offline"
+project = "cosmos3_av_id"
+
+[reptile]
+enabled = true
+episode_mode = "per_dataset"          # v3: one dataset per meta-iteration (alternating)
+dataset_schedule = "alternate"        # kitti, waymo, kitti, ... ("random" draws from data.weights instead)
+inner_steps = 10                      # optimizer steps per meta-iteration (fresh clips every step)
+inner_warmup_steps = 2                # linear LR ramp at the start of every inner loop (Adam restarts empty)
+inner_grad_clip = 1.0
+inner_reset_optimizer = true
+meta_lr = 0.5                         # eps: serial single-dataset steps zig-zag between kitti and waymo; 0.5 damps that
+meta_lr_min_ratio = 0.1               # eps 0.5 -> 0.05 linearly over max_iters
+meta_lr_warmup_iters = 0
+clips_per_rank = 1                    # clips per rank per inner step (= the baseline's max_samples_per_batch) -> 4 clips / step
+support_clips = 0                     # 0 = fresh clips every inner step (10 x 4 x 1 = 40 clips per meta-iteration)
+query_clips_per_rank = 1              # held-out clips (other drives) for the zero-shot vs adapted loss diagnostic
+query_sequence_disjoint = true
+eval_query_every = 10                 # 2 extra forward passes every 10 meta-iterations
+loss_mode = "total"                   # the recipe objective (vision + action flow matching), as in the baseline
+
+[export]
+step = 0
+
+[eval]
+mode = "full"
+clips_per_dataset = 20
+infer_gpus = 1
+eval_dir = ""
+pred_dir = ""
+render_enabled = false # native raw-camera renders are experimental; enable explicitly
+render_max_clips = 3
+render_clip_ids = []
+ground_height_m = 1.7
+horizon_steps = 60
+fps = 0.0 # 0 = each clip's own acquisition FPS for rendered qualitative videos
+layout = "both"
