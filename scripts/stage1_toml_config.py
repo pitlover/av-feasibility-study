@@ -47,7 +47,7 @@ SCHEMA = {
     "eval.horizon_steps": ("HORIZON_STEPS", int, 60, "HORIZON_STEPS"),
     "eval.fps": ("RENDER_FPS", float, 10.0, "RENDER_FPS"),
     "eval.layout": ("RENDER_LAYOUT", str, "both", "RENDER_LAYOUT"),
-    "eval.render_enabled": ("RENDER_ENABLED", bool, True, "RENDER_ENABLED"),
+    "eval.render_enabled": ("RENDER_ENABLED", bool, False, "RENDER_ENABLED"),
     "eval.render_max_clips": ("RENDER_MAX_CLIPS", int, 1, "RENDER_MAX_CLIPS"),
     "eval.render_clip_ids": ("RENDER_CLIP_IDS_JSON", list, [], "RENDER_CLIP_IDS_JSON"),
     "wandb.mode": ("WANDB_MODE", str, "disabled", "WANDB_MODE"),

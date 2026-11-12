@@ -50,7 +50,7 @@ SCHEMA = {
     'eval.horizon_steps': ('HORIZON_STEPS', int, 60),
     'eval.fps': ('RENDER_FPS', float, 10.0),
     'eval.layout': ('RENDER_LAYOUT', str, 'both'),
-    'eval.render_enabled': ('RENDER_ENABLED', bool, True),
+    'eval.render_enabled': ('RENDER_ENABLED', bool, False),
     'eval.render_max_clips': ('RENDER_MAX_CLIPS', int, 1),
     'eval.render_clip_ids': ('RENDER_CLIP_IDS_JSON', list, []),
 }
