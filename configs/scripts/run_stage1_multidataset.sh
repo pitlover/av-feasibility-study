@@ -10,9 +10,9 @@ set -Eeuo pipefail
 # KITTI + Waymo + AV2; virtual camera, 10 Hz:
 TOML_FILE="configs/stage1_virtual_10hz.toml"
 
-# Safe default: print config without starting training.
-# Change to inspect, plan, train, export, or evaluate as needed.
-DEFAULT_STEP="config"
+# Default: full pipeline (inspect -> plan -> train -> export -> evaluate).
+# Override with an argument: config, inspect, plan, train, export, evaluate.
+DEFAULT_STEP="all"
 # =======================================
 
 # The script is stored at <repository>/configs/scripts/run_stage1_multidataset.sh

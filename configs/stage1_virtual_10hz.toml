@@ -1,10 +1,10 @@
-# Stage-1 joint SFT: mixed clip FPS supported (10/12/20 as recorded in metadata).
-# `config` prints selected sources without running training.
-# Requires local installation: python apply_stage1_multisource.py --repo-root . --apply
+# Stage-1 joint SFT: KITTI + Waymo + AV2, virtual camera, 10 Hz.
+# All stages: inspect -> plan -> train -> export -> evaluate.
+# Requires the Stage-1 v5 full modified source files already installed.
 # The output dataset path may be a parent of its ablation subfolder; it is auto-detected.
 [job]
-run_step = "config"  # recommended: inspect -> plan -> train -> export -> evaluate
-run_tag = "s1_virtual_10hz_4dataset_ready"
+run_step = "all"
+run_tag = "s1_kw_av2_virtual10hz_v1"
 eval_tag = "val_seed42_v1"
 
 [paths]
@@ -26,7 +26,6 @@ seed = 42
 kitti = 1.0
 waymo = 1.0
 av2 = 1.0
-nuscenes = 1.0
 
 [data.sources]
 # Override only datasets whose source differs from paths.processed.
