@@ -1,0 +1,77 @@
+# Stage1 REPTILE meta-pretraining, v3: ONE dataset per meta-iteration (serial Reptile, kitti / waymo alternating).
+#   meta-iteration j: d = kitti if j even else waymo; inner loop on d (10 steps) on fresh clips every step, from theta;
+#                     theta <- theta + eps * (theta_d - theta)
+# Same commands as the joint baseline: bash stage1_full_train_eval.sh --toml configs/stage1_reptile_v3.toml plan|train|export|evaluate
+# Compute: 1000 meta-iterations x 10 inner steps = 10,000 optimizer steps of 4 clips (~3.3x the joint baseline's 3000).
+#   eps 0.5 -> 0.05 linearly over max_iters (sum eps ~ 275 inner-loop displacements). Budget follows the cosmos_hs11 robot
+#   recipe (1000 meta-iterations x k=10 for a 1000-2000-step post-training); matching the baseline's step count would under-train theta.
+#   Wall-clock ~ max_iters x iter_time (read iter_time from the smoke run; one inner step costs about one baseline step).
+# Final DCP: runs_stage1_full/s1_reptile_v3/outputs/cosmos3_av_id/pretrain/s1_reptile_v3/checkpoints/iter_000001000/
+# See README_REPTILE.md (Stage 2 only needs paths.stage1_run / paths.stage1_checkpoint changed to this run).
+[job]
+run_tag = "s1_reptile_v11"                # New unique run (must differ between TOMLs); do not overwrite past training
+eval_tag = "val_seed42_v1"
+run_step = "all"
+
+[paths]
+base = "."
+processed = "processed_virtutal_rawhz"
+framework = "cosmos-framework"
+edge_dcp = "/mnt/ufs/users/jiyoung-kim/project/backend/cosmos/cookbooks/cosmos3/generator/action/finetune/checkpoints/Cosmos3-Edge"
+wan_vae = "/mnt/ufs/users/jiyoung-kim/project/backend/cosmos/cookbooks/cosmos3/generator/action/finetune/checkpoints/wan22_vae/Wan2.2_VAE.pth"
+
+[data]
+epoch_clips = 12000                   # canonical train.jsonl only (export metadata); Reptile samples clips itself from train_unique.jsonl
+seed = 42
+
+[data.weights]                        # per_dataset + alternate: must be equal (each dataset gets every other meta-iteration)
+kitti = 1.0
+waymo = 1.0
+
+[train]
+gpus = 4
+max_iters = 1000                      # META-iterations (each = 1 inner loop x 10 steps); eps anneals to meta_lr*meta_lr_min_ratio exactly here
+save_every = 1000                     # final DCP only; use 250/500 if the run takes many hours (auto-resume needs a saved DCP; one DCP ~ a baseline DCP)
+
+[optimizer]
+lr = 1e-5                             # inner-loop LR = the Stage 1 / Stage 2 recipe LR (same FusedAdam, multipliers, clip 1.0)
+
+[wandb]
+enabled = true
+mode = "offline"                      # offline run files: runs_stage1_full/<run_tag>/wandb/ -> `wandb sync`
+project = "cosmos3_av_id"
+
+[reptile]
+enabled = true
+episode_mode = "per_dataset"          # v3: one dataset per meta-iteration (alternating)
+dataset_schedule = "alternate"        # kitti, waymo, kitti, ... ("random" draws from data.weights instead)
+inner_steps = 10                      # optimizer steps per meta-iteration (fresh clips every step)
+inner_warmup_steps = 2                # linear LR ramp at the start of every inner loop (Adam restarts empty)
+inner_grad_clip = 1.0
+inner_reset_optimizer = true
+meta_lr = 0.5                         # eps: serial single-dataset steps zig-zag between kitti and waymo; 0.5 damps that
+meta_lr_min_ratio = 0.1               # eps 0.5 -> 0.05 linearly over max_iters
+meta_lr_warmup_iters = 0
+clips_per_rank = 1                    # clips per rank per inner step (= the baseline's max_samples_per_batch) -> 4 clips / step
+support_clips = 0                     # 0 = fresh clips every inner step (10 x 4 x 1 = 40 clips per meta-iteration)
+query_clips_per_rank = 1              # held-out clips (other drives) for the zero-shot vs adapted loss diagnostic
+query_sequence_disjoint = true
+eval_query_every = 10                 # 2 extra forward passes every 10 meta-iterations
+loss_mode = "total"                   # the recipe objective (vision + action flow matching), as in the baseline
+
+[export]
+step = 0                              # 0 -> train.max_iters (= iter_000001000)
+
+[eval]
+mode = "full"                         # full (infer+score+render) | score | render | both
+clips_per_dataset = 20
+infer_gpus = 1
+eval_dir = ""
+pred_dir = ""
+render_enabled = false
+render_max_clips = 3
+render_clip_ids = []
+ground_height_m = 1.7
+horizon_steps = 60
+fps = 10
+layout = "both"
