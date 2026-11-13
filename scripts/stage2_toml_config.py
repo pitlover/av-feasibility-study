@@ -32,6 +32,15 @@ SCHEMA = {
     'paths.wan_vae': ('WAN_VAE', str, ''),  # fallback to stage1_run/run.json
     'data.epoch_clips': ('EPOCH_CLIPS', int, 12000),
     'data.seed': ('SEED', int, 42),
+    'data.datasets': ('DATASETS_JSON', list, ['av2']),
+    'data.sources.kitti': ('SOURCE_KITTI', str, ''),
+    'data.sources.waymo': ('SOURCE_WAYMO', str, ''),
+    'data.sources.av2': ('SOURCE_AV2', str, ''),
+    'data.sources.nuscenes': ('SOURCE_NUSCENES', str, ''),
+    'data.weights.kitti': ('WEIGHT_KITTI', float, 1.0),
+    'data.weights.waymo': ('WEIGHT_WAYMO', float, 1.0),
+    'data.weights.av2': ('WEIGHT_AV2', float, 1.0),
+    'data.weights.nuscenes': ('WEIGHT_NUSCENES', float, 1.0),
     'train.gpus': ('GPUS', int, 4),
     'train.max_iters': ('MAX_ITERS', int, 3000),
     'train.save_every': ('SAVE_EVERY', int, 500),
@@ -135,6 +144,13 @@ def resolve(path: str | None, overrides: list[str]) -> dict:
         raw = parsed.get(key, raw)
         raw = cli.get(key, raw)
         values[key] = coerce(key, raw)
+    selected = values['data.datasets']
+    allowed = {'kitti', 'waymo', 'av2', 'nuscenes'}
+    if not selected or len(set(selected)) != len(selected) or set(selected) - allowed:
+        raise ValueError(f'data.datasets must be a unique nonempty subset of {sorted(allowed)}')
+    for ds in selected:
+        if values[f'data.weights.{ds}'] <= 0:
+            raise ValueError(f'data.weights.{ds} must be positive')
     enabled, mode = values['wandb.enabled'], values['wandb.mode']
     if mode not in {'online', 'offline', 'disabled'}:
         raise ValueError('wandb.mode must be disabled/online/offline')
@@ -154,8 +170,8 @@ def resolve(path: str | None, overrides: list[str]) -> dict:
         raise ValueError('export.step must be a saved iteration')
     if values['export.step'] == 0:
         values['export.step'] = values['train.max_iters']
-    if values['optimizer.lr'] <= 0 or values['eval.fps'] <= 0:
-        raise ValueError('optimizer.lr and eval.fps must be positive')
+    if values['optimizer.lr'] <= 0 or values['eval.fps'] < 0:
+        raise ValueError('optimizer.lr must be positive and eval.fps must be >=0 (0=per-clip auto)')
     if values['eval.horizon_steps'] > 60:
         raise ValueError('eval.horizon_steps must be 1..60')
     if values['eval.layout'] not in {'both','bev','projected'}:
@@ -179,7 +195,7 @@ def resolve(path: str | None, overrides: list[str]) -> dict:
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--toml')
-    p.add_argument('--format', choices=('json','env0'), default='env0')
+    p.add_argument('--format', choices=('json','env0','source-json'), default='env0')
     p.add_argument('overrides', nargs='*')
     args = p.parse_args()
     try:
@@ -189,6 +205,16 @@ def main():
         return 2
     if args.format == 'json':
         print(json.dumps(data, indent=2, ensure_ascii=False))
+    elif args.format == 'source-json':
+        selected = data['data.datasets']
+        spec = {
+            'base': data['paths.base'],
+            'processed': data['paths.processed'],
+            'datasets': selected,
+            'sources': {ds: data[f'data.sources.{ds}'] for ds in selected},
+            'weights': {ds: data[f'data.weights.{ds}'] for ds in selected},
+        }
+        print(json.dumps(spec, ensure_ascii=False))
     else:
         for key, (env, _, _) in SCHEMA.items():
             v = data[key]

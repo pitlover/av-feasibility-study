@@ -51,6 +51,28 @@ for var in FRAMEWORK PROCESSED STAGE1_RUN STAGE1_CKPT WAN_VAE EVAL_DIR_OVERRIDE 
     printf -v "$var" '%s' "$BASE/$val"
   fi
 done
+SPEC_CMD=(python "$HELPER" --format source-json)
+[[ -z "$CONFIG_PATH" ]] || SPEC_CMD+=(--toml "$CONFIG_PATH")
+SOURCE_SPEC_JSON="$("${SPEC_CMD[@]}" "${OVERRIDES[@]}")" || exit 2
+DATASETS_JSON="$(python - "$SOURCE_SPEC_JSON" <<'PY_DS_JSON'
+import json,sys
+print(json.dumps(json.loads(sys.argv[1])['datasets']))
+PY_DS_JSON
+)"
+DATASET_LIST=()
+while IFS= read -r name; do
+  [[ -n "$name" ]] && DATASET_LIST+=("$name")
+done < <(python - "$DATASETS_JSON" <<'PY_DS_LIST'
+import json,sys
+for ds in json.loads(sys.argv[1]): print(ds)
+PY_DS_LIST
+)
+DATASET_SUFFIX="$(IFS=_; echo "${DATASET_LIST[*]}")"
+MIX_WEIGHTS="$(python - "$SOURCE_SPEC_JSON" <<'PY_MIX'
+import json,sys
+spec=json.loads(sys.argv[1]); print(','.join(f'{ds}:{spec["weights"][ds]}' for ds in spec['datasets']))
+PY_MIX
+)"
 if [[ "$MODE" == config ]]; then
   echo '[CONFIG] Parsed TOML values (relative paths resolve under BASE when running):'
   "${CONFIG_CMD[@]}" --format json "${OVERRIDES[@]}"
@@ -64,7 +86,7 @@ S2_FINAL_DCP="$S2_OUTPUT/checkpoints/$(printf 'iter_%09d' "$MAX_ITERS")"
 S2_DCP="$S2_OUTPUT/checkpoints/$(printf 'iter_%09d' "$STEP")"
 S2_CFG="$S2_OUTPUT/config.yaml"
 MODEL="$BASE/exports/${RUN_TAG}_iter_${STEP}"
-EVAL="$BASE/evaluation/stage2_${RUN_TAG}/av2_${EVAL_TAG}"
+EVAL="$BASE/evaluation/stage2_${RUN_TAG}/${DATASET_SUFFIX}_${EVAL_TAG}"
 PRED="$BASE/evaluation/pred_${RUN_TAG}_iter_${STEP}_${EVAL_TAG}"
 # Allow score/render to read predictions created by a different evaluation/infer run.
 # In particular this supports manually generated *_retry1 prediction folders.
@@ -89,7 +111,7 @@ info = json.loads((run/'run.json').read_text(encoding='utf-8'))
 if info.get('stage') != 'pretrain':
     raise SystemExit('[ERROR] stage1_run/run.json does not describe a Stage1 pretrain run')
 if info.get('action_frame') != 'camera':
-    raise SystemExit('[ERROR] Stage1 is not camera-relative; incompatible with current AV2 Stage2')
+    raise SystemExit('[ERROR] Stage1 is not camera-relative; incompatible with camera-action Stage2')
 if info.get('action_normalizer') is not None:
     raise SystemExit('[ERROR] This script targets the existing raw-9D Stage1. Normalized Stage1 needs explicitly matched export/inference settings.')
 if run / 'outputs' not in ckpt.parents:
@@ -117,10 +139,6 @@ PY
   infer) need_file "$FRAMEWORK/cosmos_framework/scripts/train.py" ;;
   evaluate) [[ "$EVAL_MODE" != full ]] || need_file "$FRAMEWORK/cosmos_framework/scripts/train.py" ;;
 esac
-case "$MODE" in
-  plan|train|inspect|prepare|oracle|all) need_file "$PROCESSED/index.jsonl" ;;
-  evaluate) [[ "$EVAL_MODE" != full ]] || need_file "$PROCESSED/index.jsonl" ;;
-esac
 
 echo "[CONFIG] mode=$MODE run=$RUN_TAG stage1_run=$STAGE1_RUN"
 echo "[CONFIG] stage1_ckpt=$STAGE1_CKPT"
@@ -136,8 +154,9 @@ audit_plan(){
 import json,sys
 p=json.load(open(sys.argv[1]));n=json.load(open(sys.argv[2]))
 keys=('job.run_tag','paths.stage1_run','paths.stage1_checkpoint','paths.processed',
-      'data.epoch_clips','data.seed','train.gpus','train.max_iters',
+      'data.datasets','data.epoch_clips','data.seed','train.gpus','train.max_iters',
       'train.save_every','optimizer.lr','wandb.enabled','wandb.mode')
+keys+=tuple(sorted(k for k in set(p)|set(n) if k.startswith(('data.sources.','data.weights.'))))
 bad=[k for k in keys if p.get(k)!=n.get(k)]
 for k in bad:print(f'[PLAN MISMATCH] {k}: planned={p.get(k)!r} now={n.get(k)!r}')
 sys.exit(bool(bad))
@@ -151,33 +170,46 @@ PY
 }
 
 inspect(){
-  python - "$PROCESSED/index.jsonl" <<'PY'
+  local tmp
+  tmp="$(mktemp -d)"
+  if ! python "$SCRIPT_DIR/scripts/stage1_source_index.py" --spec-json "$SOURCE_SPEC_JSON" --outdir "$tmp"; then
+    rm -rf "$tmp"
+    fail 'Stage2 source-index inspection failed'
+  fi
+  python - "$tmp/index.jsonl" "$DATASETS_JSON" <<'PY_INSPECT'
 import json,sys
 from collections import Counter
-rows=[json.loads(line) for line in open(sys.argv[1]) if line.strip()]
-print('[AV2 DATASET COUNTS]',dict(Counter((r['dataset'],r['split']) for r in rows if r['dataset']=='av2')))
-for sp in ('train','val'):
-    seq={r['sequence'] for r in rows if r['dataset']=='av2' and r['split']==sp}
-    print(f'AV2 {sp}: {len(seq)} sequences')
-PY
+from pathlib import Path
+rows=[json.loads(x) for x in Path(sys.argv[1]).read_text().splitlines() if x.strip()]
+for ds in json.loads(sys.argv[2]):
+    counts=Counter(r['split'] for r in rows if r['dataset']==ds)
+    print(f'[STAGE2] {ds} clips={dict(counts)}')
+    for split in ('train','val'):
+        seq={r['sequence'] for r in rows if r['dataset']==ds and r['split']==split}
+        print(f'  {split}: {len(seq)} sequences')
+PY_INSPECT
+  rm -rf "$tmp"
 }
 
 plan(){
   [[ ! -e "$S2" ]] || fail "Existing Stage2 run directory: $S2 (use a NEW job.run_tag)"
-  python -m cosmos3av.cli plan --stage posttrain --datasets av2 \
-    --stage1-run "$STAGE1_RUN" \
-    --processed-root "$PROCESSED" --init-checkpoint "$STAGE1_CKPT" --wan-vae "$WAN_VAE" \
+  python "$SCRIPT_DIR/scripts/stage1_source_index.py" \
+    --spec-json "$SOURCE_SPEC_JSON" --outdir "$S2/input_sources" \
+    || fail 'Stage2 source index merge failed'
+  python -m cosmos3av.cli plan --stage posttrain --datasets "${DATASET_LIST[@]}" \
+    --weights "$MIX_WEIGHTS" --stage1-run "$STAGE1_RUN" \
+    --processed-root "$S2/input_sources" --init-checkpoint "$STAGE1_CKPT" --wan-vae "$WAN_VAE" \
     --outdir "$S2" --epoch-clips "$EPOCH_CLIPS" \
     --max-iters "$MAX_ITERS" --save-every "$SAVE_EVERY" --lr "$LR" \
     --gpus "$GPUS" --seed "$SEED" --wandb-mode "$WANDB_MODE" --full-preflight
   [[ -z "$CONFIG_PATH" ]] || cp "$CONFIG_PATH" "$S2/source_stage2_config.toml"
   "${CONFIG_CMD[@]}" --format json "${OVERRIDES[@]}" > "$S2/resolved_stage2_config.json"
   (cd "$BASE" && sha256sum "${STAGE1_CKPT#"$BASE/"}/model/.metadata" > "$S2/stage1_checkpoint.sha256")
-  python - "$S2/run.json" "$STAGE1_CKPT" <<'PY'
+  python - "$S2/run.json" "$STAGE1_CKPT" "$DATASETS_JSON" <<'PY'
 import json,sys
 from pathlib import Path
 p=Path(sys.argv[1]); d=json.loads(p.read_text()); expected=Path(sys.argv[2]).resolve()
-assert d['stage']=='posttrain' and d['datasets']==['av2']
+assert d['stage']=='posttrain' and d['datasets']==json.loads(sys.argv[3])
 assert d['action_frame']=='camera' and d['action_normalizer'] is None
 assert Path(d['init_checkpoint']).resolve()==expected, 'Stage2 did not receive Stage1 DCP!'
 print('[PLAN OK] Stage2 initial checkpoint is Stage1:', d['init_checkpoint'])
@@ -190,7 +222,7 @@ train(){
   audit_plan
   [[ ! -e "$S2/train.log" ]] || fail "Existing train.log: $S2/train.log (not implicitly resuming)"
   [[ ! -e "$S2_FINAL_DCP" ]] || fail "Existing final DCP: $S2_FINAL_DCP"
-  echo '[TRAIN] AV2 posttraining from Stage1 DCP. Starting...' 
+  echo "[TRAIN] Stage2 posttraining on ${DATASET_LIST[*]} from Stage1 DCP. Starting..." 
   unset IMAGINAIRE_OUTPUT_ROOT || true
   python -m cosmos3av.cli launch --run-dir "$S2" --framework-root "$FRAMEWORK" \
     --execute 2>&1 | tee "$S2/train.log"
@@ -216,40 +248,46 @@ export_model(){
 
 prepare_eval(){
   if [[ -f "$EVAL/selection.jsonl" && -f "$EVAL/inference_requests.jsonl" ]]; then
-    echo "[PREPARE] Using existing AV2 selection: $EVAL"
+    echo "[PREPARE] Using existing selection: $EVAL"
     return
   fi
   [[ ! -e "$EVAL" ]] || fail "Incomplete evaluation directory: $EVAL"
-  python - "$PROCESSED" "$EVAL" "$EVAL_CLIPS" "$SEED" <<'PY'
+  local index_root="$S2/input_sources"
+  need_file "$index_root/index.jsonl"
+  python - "$index_root/index.jsonl" "$EVAL" "$EVAL_CLIPS" "$SEED" "$DATASETS_JSON" <<'PY_PREPARE'
 import json,random,sys
 from collections import defaultdict
 from pathlib import Path
 from cosmos3eval.data import read_jsonl,write_jsonl,verify_row,make_request
-root,out=map(Path,sys.argv[1:3]); count=int(sys.argv[3]);seed=int(sys.argv[4])
-rows=read_jsonl(root/'index.jsonl')
-train={r['sequence'] for r in rows if r['dataset']=='av2' and r['split']=='train'}
-val=[r for r in rows if r['dataset']=='av2' and r['split']=='val']
-if not val:raise SystemExit('[ERROR] No AV2/val clips found')
-overlap=train & {r['sequence'] for r in val}
-if overlap:raise SystemExit(f'[ERROR] AV2 train/val sequence overlap: {sorted(overlap)[:5]}')
-groups=defaultdict(list)
-for r in val:groups[r['sequence']].append(r)
-rng=random.Random(seed);keys=sorted(groups);rng.shuffle(keys)
-for key in keys:rng.shuffle(groups[key])
+index,out=map(Path,sys.argv[1:3]); count=int(sys.argv[3]); seed=int(sys.argv[4]); datasets=json.loads(sys.argv[5])
+rows=read_jsonl(index)
 chosen=[]
-while len(chosen)<min(count,len(val)):
-    any_added=False
-    for key in keys:
-        if groups[key]:
-            chosen.append(groups[key].pop());any_added=True
-            if len(chosen)>=min(count,len(val)):break
-    if not any_added:break
-for r in chosen:verify_row(r)
+for di,ds in enumerate(datasets):
+    train={r['sequence'] for r in rows if r['dataset']==ds and r['split']=='train'}
+    val=[r for r in rows if r['dataset']==ds and r['split']=='val']
+    if not val: raise SystemExit(f'[ERROR] No {ds}/val clips found')
+    overlap=train & {r['sequence'] for r in val}
+    if overlap: raise SystemExit(f'[ERROR] {ds} train/val overlap: {sorted(overlap)[:5]}')
+    groups=defaultdict(list)
+    for r in val: groups[r['sequence']].append(r)
+    rng=random.Random(seed+di); keys=sorted(groups); rng.shuffle(keys)
+    for key in keys:rng.shuffle(groups[key])
+    selected=[]
+    while len(selected)<min(count,len(val)):
+        any_added=False
+        for key in keys:
+            if groups[key]:
+                selected.append(groups[key].pop()); any_added=True
+                if len(selected)>=min(count,len(val)): break
+        if not any_added: break
+    chosen.extend(selected)
+    print(f'[PREPARE] {ds}: val={len(selected)} clips / {len({r["sequence"] for r in selected})} sequences')
+for r in chosen: verify_row(r)
 out.mkdir(parents=True,exist_ok=False)
 write_jsonl(out/'selection.jsonl',chosen)
 write_jsonl(out/'inference_requests.jsonl',[make_request(r,seed) for r in chosen])
-print(f'[PREPARE OK] AV2 val clips={len(chosen)} sequences={len({r["sequence"] for r in chosen})}')
-PY
+print(f'[PREPARE OK] selected {len(chosen)} clips from {datasets}')
+PY_PREPARE
 }
 
 oracle(){
@@ -308,7 +346,7 @@ score(){
   python - "$PRED/metrics/summary.json" <<'PY'
 import json,sys
 x=json.load(open(sys.argv[1])); o=x['overall']
-print('[STAGE2 AV2 EVALUATION]', 'clips=', o['n_clips'], 'failed=',o['n_failed'])
+print('[STAGE2 EVALUATION]', 'clips=', o['n_clips'], 'failed=',o['n_failed'])
 for k in ('rre_deg_mean','rte_m_mean','ate_m_rmse','final_position_error_m_mean'):
     print(k, o.get(k))
 PY
@@ -318,18 +356,26 @@ render(){
   # Only render an evaluation when ALL selected clips have predictions.
   # A partial run should never silently be treated as complete.
   verify_predictions
-  local selected ds cid
+  local selected ds cid clip_fps
   selected="$(python "$SCRIPT_DIR/scripts/choose_render_clips.py" \
-    --selection "$EVAL/selection.jsonl" --datasets av2 \
+    --selection "$EVAL/selection.jsonl" --datasets "${DATASET_LIST[@]}" \
     --max-per-dataset "$RENDER_MAX_CLIPS" --clip-ids-json "$RENDER_CLIP_IDS_JSON")" \
     || fail "Could not select Stage2 clips for rendering"
   while IFS=$'\t' read -r ds cid; do
     [[ -n "$cid" ]] || continue
-    echo "[RENDER] $ds clip=$cid (ground_height_m=$GROUND_HEIGHT_M approximate)"
+    clip_fps="$(python - "$EVAL/selection.jsonl" "$cid" "$RENDER_FPS" <<'PY_RENDER_FPS'
+import json,sys
+from pathlib import Path
+chosen=next(r for r in (json.loads(s) for s in Path(sys.argv[1]).read_text().splitlines() if s.strip()) if r['clip_id']==sys.argv[2])
+requested=float(sys.argv[3]); meta=json.loads(Path(chosen['meta']).read_text(encoding='utf-8'))
+print(requested if requested>0 else meta['fps'])
+PY_RENDER_FPS
+)"
+    echo "[RENDER] $ds clip=$cid fps=$clip_fps (ground_height_m=$GROUND_HEIGHT_M approximate)"
     python -m cosmos3eval.cli render --eval-dir "$EVAL" --pred-dir "$PRED" \
       --clip-id "$cid" --layout "$RENDER_LAYOUT" \
       --ground-height-m "$GROUND_HEIGHT_M" --horizon-steps "$HORIZON_STEPS" \
-      --fps "$RENDER_FPS" --out-dir "$PRED/qualitative/$ds"
+      --fps "$clip_fps" --out-dir "$PRED/qualitative/$ds"
   done <<< "$selected"
   echo "[RENDER OK] $PRED/qualitative/"
 }
