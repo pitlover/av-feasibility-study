@@ -4,7 +4,7 @@
 # The output dataset path may be a parent of its ablation subfolder; it is auto-detected.
 [job]
 run_step = "all"
-run_tag = "s1_kw_av2_virtual10hz_v1_reptile_v3"
+run_tag = "s1_kw_av2_virtual10hz_reptile_v3"
 eval_tag = "val_seed42_v1"
 
 [paths]

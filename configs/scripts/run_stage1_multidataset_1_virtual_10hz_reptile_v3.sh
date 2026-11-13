@@ -8,7 +8,7 @@ set -Eeuo pipefail
 # ============== EDIT HERE ==============
 # TOML is relative to the repository root (not configs/scripts/).
 # KITTI + Waymo + AV2; virtual camera, 10 Hz:
-TOML_FILE="configs/stage1_original_10hz_reptile_v3.toml"
+TOML_FILE="configs/stage1_1_virtual_10hz_reptile_v3.toml
 
 # Default: full pipeline (inspect -> plan -> train -> export -> evaluate).
 # Override with an argument: config, inspect, plan, train, export, evaluate.
