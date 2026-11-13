@@ -97,7 +97,9 @@ def preflight(r: dict, *, max_dt_error_s: float = 0.07, check_video: bool = Fals
 
 
 def select_stage(rows: list[dict], stage: str, selected: list[str], split: str = 'train') -> list[dict]:
-    allowed = set(DATASETS) if stage == 'pretrain' else {'av2'}
+    if stage not in ('pretrain', 'posttrain'):
+        raise ValueError(f'Unsupported stage: {stage}')
+    allowed = set(DATASETS)
     if not selected or len(set(selected)) != len(selected) or set(selected) - allowed:
         raise ValueError(f'{stage}: datasets must be a nonempty subset of {sorted(allowed)}')
     result = [r for r in rows if r['dataset'] in selected and r['split'] == split]
