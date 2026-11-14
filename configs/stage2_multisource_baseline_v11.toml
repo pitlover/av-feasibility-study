@@ -5,7 +5,7 @@
 
 [job]
 run_step = "all"
-run_tag = "s2_nuscenes_baseline_v1"
+run_tag = "s2_nuscenes_baseline_v11"
 eval_tag = "val_seed42_v1"
 
 
@@ -56,7 +56,7 @@ seed = 42
 # av2 = "/mnt/ufs/users/jaeha-lee/share/jiiyoung/cosmos3_ji/processed_raw_rawhz/original_native"
 
 # nuScenes: Virtual camera, native 12Hz
-nuscenes = "/mnt/ufs/users/jaeha-lee/share/jiiyoung/cosmos3_ji/processed_virtual_rawhz/virtual_native"
+# nuscenes = "/mnt/ufs/users/jaeha-lee/share/jiiyoung/cosmos3_ji/processed_virtual_rawhz/virtual_native"
 
 
 # ========================================
@@ -110,7 +110,7 @@ step = 0
 
 [eval]
 mode = "full"
-clips_per_dataset = 20
+clips_per_dataset = 351
 infer_gpus = 1
 
 eval_dir = ""

@@ -108,7 +108,7 @@ step = 0
 
 [eval]
 mode = "full"
-clips_per_dataset = 20
+clips_per_dataset = 351
 infer_gpus = 1
 
 eval_dir = ""

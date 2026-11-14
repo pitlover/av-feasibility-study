@@ -5,7 +5,7 @@
 
 [job]
 run_step = "all"
-run_tag = "s2_nuscenes_virtual_rawhz_v3_3"
+run_tag = "s2_nuscenes_original_rawhz_v3_10"
 eval_tag = "val_seed42_v1"
 
 
@@ -26,10 +26,10 @@ processed = "/mnt/ufs/users/jaeha-lee/share/jiiyoung/cosmos3_ji/processed_virtua
 framework = "cosmos-framework"
 
 # Existing Stage-1 run
-stage1_run = "runs_stage1_full/s1_virtual_rawhz_4datasets_reptile_v3"
+stage1_run = "runs_stage1_full/s1_original_rawhz_4datasets_reptile_v3"
 
 # Existing Stage-1 checkpoint
-stage1_checkpoint = "runs_stage1_full/s1_virtual_rawhz_4datasets_reptile_v3/outputs/cosmos3_av_id/pretrain/s1_virtual_rawhz_4datasets_reptile_v3/checkpoints/iter_000001000"
+stage1_checkpoint = "runs_stage1_full/s1_original_rawhz_4datasets_reptile_v3/outputs/cosmos3_av_id/pretrain/s1_original_rawhz_4datasets_reptile_v3/checkpoints/iter_000001000"
 
 wan_vae = "/mnt/ufs/users/jiyoung-kim/project/backend/cosmos/cookbooks/cosmos3/generator/action/finetune/checkpoints/wan22_vae/Wan2.2_VAE.pth"
 
@@ -54,7 +54,7 @@ seed = 42
 # av2 = "/mnt/ufs/users/jaeha-lee/share/jiiyoung/cosmos3_ji/processed_raw_rawhz/original_native"
 
 # nuScenes: Virtual camera, native 12Hz
-nuscenes = "/mnt/ufs/users/jaeha-lee/share/jiiyoung/cosmos3_ji/processed_virtual_rawhz/virtual_native"
+# nuscenes = "/mnt/ufs/users/jaeha-lee/share/jiiyoung/cosmos3_ji/processed_virtual_rawhz/virtual_native"
 
 
 # ========================================
@@ -108,7 +108,7 @@ step = 0
 
 [eval]
 mode = "full"
-clips_per_dataset = 20
+clips_per_dataset = 351
 infer_gpus = 1
 
 eval_dir = ""
