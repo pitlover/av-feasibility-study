@@ -5,7 +5,7 @@ set -Eeuo pipefail
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 # Change only this line to select a different TOML.
-TOML="$PROJECT_ROOT/configs/stage2_multisource_3_original_rawhz_v3_3.toml"
+TOML="$PROJECT_ROOT/configs/stage2_multisource_3_original_rawhz_v3_10.toml"
 
 ORIGINAL_SCRIPT="$PROJECT_ROOT/stage2_full_train_eval.sh"
 PYTHON_BIN="${PYTHON_BIN:-python3}"

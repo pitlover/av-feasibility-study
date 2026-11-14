@@ -1,0 +1,127 @@
+
+# ========================================
+# Cosmos3-Edge Stage-2 Multi-Dataset
+# ========================================
+
+[job]
+run_step = "all"
+run_tag = "s2_nuscenes_original_rawhz_v3_13"
+eval_tag = "val_seed42_v1"
+
+
+# ========================================
+# Paths
+# ========================================
+
+[paths]
+base = "."
+run_root = "runs_stage2"
+exports_root = "exports"
+evaluation_root = "evaluation"
+
+# Default preprocessing root.
+# Used only when data.sources.<dataset> is empty.
+processed = "/mnt/ufs/users/jaeha-lee/share/jiiyoung/cosmos3_ji/processed_raw_rawhz/original_native"
+
+framework = "cosmos-framework"
+
+# Existing Stage-1 run
+stage1_run = "runs_stage1_full/s1_original_rawhz_4datasets_reptile_v3"
+
+# Existing Stage-1 checkpoint
+stage1_checkpoint = "runs_stage1_full/s1_original_rawhz_4datasets_reptile_v3/outputs/cosmos3_av_id/pretrain/s1_original_rawhz_4datasets_reptile_v3/checkpoints/iter_000001000"
+
+wan_vae = "/mnt/ufs/users/jiyoung-kim/project/backend/cosmos/cookbooks/cosmos3/generator/action/finetune/checkpoints/wan22_vae/Wan2.2_VAE.pth"
+
+
+# ========================================
+# Dataset Selection
+# ========================================
+
+[data]
+datasets = ["nuscenes"]
+epoch_clips = 12000
+seed = 42
+
+
+# ========================================
+# Dataset Sources
+# ========================================
+
+[data.sources]
+
+# AV2: Original camera, native 20Hz
+# av2 = "/mnt/ufs/users/jaeha-lee/share/jiiyoung/cosmos3_ji/processed_raw_rawhz/original_native"
+
+# nuScenes: Virtual camera, native 12Hz
+# nuscenes = "/mnt/ufs/users/jaeha-lee/share/jiiyoung/cosmos3_ji/processed_virtual_rawhz/virtual_native"
+
+
+# ========================================
+# Dataset Sampling Weights
+# ========================================
+
+[data.weights]
+# av2 = 1.0
+nuscenes = 1.0
+
+
+# ========================================
+# Training
+# ========================================
+
+[train]
+gpus = 4
+max_iters = 50000
+save_every = 50000
+
+
+# ========================================
+# Optimizer
+# ========================================
+
+[optimizer]
+lr = 1e-5
+
+
+# ========================================
+# WandB
+# ========================================
+
+[wandb]
+enabled = false
+mode = "disabled"
+project = "cosmos3_av_id"
+
+
+# ========================================
+# Export
+# ========================================
+
+[export]
+step = 0
+
+
+# ========================================
+# Evaluation
+# ========================================
+
+[eval]
+mode = "full"
+clips_per_dataset = 351
+infer_gpus = 1
+
+eval_dir = ""
+pred_dir = ""
+
+render_enabled = false
+render_max_clips = 3
+render_clip_ids = []
+
+ground_height_m = 1.7
+horizon_steps = 60
+
+# 0 = Use each clip's original FPS
+fps = 0
+
+layout = "both"
